@@ -13,6 +13,11 @@ from data.fetch_ohlc import (
     _to_quote_symbol,
     pivot_close,
 )
+from data.update_ohlcv import (
+    fetch_ohlcv_paginated,
+    merge_ohlcv_frames,
+    symbol_to_local_filename,
+)
 
 
 def test_sanitize_symbol() -> None:
@@ -87,3 +92,118 @@ def test_pivot_close() -> None:
     assert list(close_matrix.columns) == ["BTC/USD", "ETH/USD"]
     assert close_matrix.loc[df["timestamp"].iloc[0], "BTC/USD"] == 100.0
     assert close_matrix.loc[df["timestamp"].iloc[4], "ETH/USD"] == 50.0
+
+
+def test_symbol_to_local_filename() -> None:
+    """Test symbol to local CSV filename mapping."""
+    path = symbol_to_local_filename("BTC/USD", timeframe="4h")
+    assert str(path).endswith("data/local/btc-usd_4h.csv")
+
+
+def test_fetch_ohlcv_paginated_combines_batches() -> None:
+    """Test paginated downloader combines sequential non-empty batches."""
+
+    class DummyExchange:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def fetch_ohlcv(self, symbol: str, timeframe: str, since: int, limit: int) -> list[list[float]]:
+            self.calls += 1
+            if self.calls == 1:
+                return [
+                    [1000, 1.0, 1.1, 0.9, 1.0, 10.0],
+                    [2000, 1.0, 1.1, 0.9, 1.0, 10.0],
+                ]
+            if self.calls == 2:
+                return [[3000, 1.0, 1.1, 0.9, 1.0, 10.0]]
+            return []
+
+    exchange = DummyExchange()
+    df = fetch_ohlcv_paginated(
+        exchange=exchange,
+        symbol="BTC/USD",
+        timeframe="4h",
+        since_ms=1000,
+        limit=720,
+        max_batches=10,
+        sleep_seconds=0.0,
+    )
+
+    assert len(df) == 3
+    assert df["timestamp"].tolist() == [1000, 2000, 3000]
+    assert int(df.attrs["batches_completed"]) == 3
+
+
+def test_fetch_ohlcv_paginated_stops_on_empty_batch() -> None:
+    """Test paginated downloader stops immediately on empty batch."""
+
+    class DummyExchange:
+        def fetch_ohlcv(self, symbol: str, timeframe: str, since: int, limit: int) -> list[list[float]]:
+            return []
+
+    df = fetch_ohlcv_paginated(
+        exchange=DummyExchange(),
+        symbol="BTC/USD",
+        timeframe="4h",
+        since_ms=1000,
+        limit=720,
+        max_batches=10,
+        sleep_seconds=0.0,
+    )
+
+    assert df.empty
+    assert int(df.attrs["batches_completed"]) == 1
+
+
+def test_fetch_ohlcv_paginated_stops_when_timestamp_not_advancing() -> None:
+    """Test paginated downloader stops when the last timestamp does not advance."""
+
+    class DummyExchange:
+        def fetch_ohlcv(self, symbol: str, timeframe: str, since: int, limit: int) -> list[list[float]]:
+            return [[since, 1.0, 1.1, 0.9, 1.0, 10.0]]
+
+    df = fetch_ohlcv_paginated(
+        exchange=DummyExchange(),
+        symbol="BTC/USD",
+        timeframe="4h",
+        since_ms=1000,
+        limit=720,
+        max_batches=10,
+        sleep_seconds=0.0,
+    )
+
+    assert len(df) == 1
+    assert df["timestamp"].iloc[0] == 1000
+    assert int(df.attrs["batches_completed"]) == 1
+
+
+def test_merge_ohlcv_frames_deduplicates_and_sorts() -> None:
+    """Test merge keeps latest duplicate timestamp and sorts ascending."""
+    existing = pd.DataFrame(
+        {
+            "timestamp": [2000, 1000],
+            "open": [2.0, 1.0],
+            "high": [2.2, 1.2],
+            "low": [1.8, 0.8],
+            "close": [2.0, 1.0],
+            "volume": [20.0, 10.0],
+        }
+    )
+    downloaded = pd.DataFrame(
+        {
+            "timestamp": [1000, 3000],
+            "open": [1.5, 3.0],
+            "high": [1.6, 3.2],
+            "low": [1.4, 2.8],
+            "close": [1.5, 3.0],
+            "volume": [15.0, 30.0],
+        }
+    )
+
+    merged = merge_ohlcv_frames(existing=existing, downloaded=downloaded)
+
+    assert len(merged) == 3
+    assert merged["timestamp"].is_monotonic_increasing
+
+    row_1000 = merged.loc[merged["timestamp"] == pd.to_datetime(1000, unit="ms", utc=True)].iloc[0]
+    assert row_1000["close"] == pytest.approx(1.5)

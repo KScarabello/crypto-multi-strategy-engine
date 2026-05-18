@@ -14,6 +14,7 @@ Run:
 
 from __future__ import annotations
 
+import argparse
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -56,6 +57,7 @@ class CoverageRow:
     latest_timestamp: str
     expected_bars: int
     missing_bars: int
+    missing_timestamps: tuple[str, ...]
     duplicate_timestamps: int
     coverage_pct: float
     status: str
@@ -75,6 +77,23 @@ def load_ohlcv(path: Path) -> pd.DataFrame:
     df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
     df = df.sort_values("timestamp").reset_index(drop=True)
     return df
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse CLI arguments for coverage analysis."""
+    parser = argparse.ArgumentParser(description="Analyze OHLCV coverage for the expanded universe")
+    parser.add_argument(
+        "--show-missing",
+        action="store_true",
+        help="Print exact missing timestamps for symbols with gaps",
+    )
+    parser.add_argument(
+        "--max-missing-to-print",
+        type=int,
+        default=20,
+        help="Maximum missing timestamps to print per symbol",
+    )
+    return parser.parse_args()
 
 
 def classify_status(rows: int, coverage_pct: float, missing_bars: int) -> str:
@@ -103,6 +122,7 @@ def analyze_symbol(symbol: str) -> CoverageRow:
             latest_timestamp="MISSING",
             expected_bars=0,
             missing_bars=0,
+            missing_timestamps=(),
             duplicate_timestamps=0,
             coverage_pct=0.0,
             status="missing_file",
@@ -119,6 +139,7 @@ def analyze_symbol(symbol: str) -> CoverageRow:
             latest_timestamp="EMPTY",
             expected_bars=0,
             missing_bars=0,
+            missing_timestamps=(),
             duplicate_timestamps=0,
             coverage_pct=0.0,
             status="empty",
@@ -138,7 +159,8 @@ def analyze_symbol(symbol: str) -> CoverageRow:
     )
 
     actual_unique_timestamps = pd.DatetimeIndex(timestamps.drop_duplicates())
-    missing_bars = int(len(expected_index.difference(actual_unique_timestamps)))
+    missing_index = expected_index.difference(actual_unique_timestamps)
+    missing_bars = int(len(missing_index))
     expected_bars = int(len(expected_index))
 
     coverage_pct = (
@@ -159,13 +181,34 @@ def analyze_symbol(symbol: str) -> CoverageRow:
         latest_timestamp=str(latest),
         expected_bars=expected_bars,
         missing_bars=missing_bars,
+        missing_timestamps=tuple(ts.isoformat() for ts in missing_index),
         duplicate_timestamps=duplicate_timestamps,
         coverage_pct=round(coverage_pct, 2),
         status=status,
     )
 
 
+def print_missing_timestamps(report: pd.DataFrame, max_missing_to_print: int) -> None:
+    """Print exact missing timestamps for symbols with gaps."""
+    if max_missing_to_print <= 0:
+        return
+
+    symbols_with_gaps = report.loc[report["missing_bars"] > 0, ["symbol", "missing_timestamps"]]
+    if symbols_with_gaps.empty:
+        return
+
+    print("\nMissing timestamps")
+    print("=" * 65)
+
+    for _, row in symbols_with_gaps.iterrows():
+        print(row["symbol"])
+        missing_timestamps = list(row["missing_timestamps"] or ())
+        for timestamp in missing_timestamps[:max_missing_to_print]:
+            print(f"  {timestamp}")
+
+
 def main() -> None:
+    args = parse_args()
     rows = [analyze_symbol(symbol) for symbol in EXPANDED_UNIVERSE_20]
 
     report = pd.DataFrame([row.__dict__ for row in rows])
@@ -195,6 +238,9 @@ def main() -> None:
         print("=" * 120)
         needs_review = report.loc[report["status"] != "ok", display_columns]
         print(needs_review.to_string(index=False))
+
+    if args.show_missing:
+        print_missing_timestamps(report, max_missing_to_print=args.max_missing_to_print)
 
 
 if __name__ == "__main__":

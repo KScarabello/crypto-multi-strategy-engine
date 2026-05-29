@@ -185,3 +185,5 @@ logs/
 # Backups
 *.backup
 backups/
+
+*.csv

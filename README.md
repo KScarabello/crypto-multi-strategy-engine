@@ -197,6 +197,16 @@ print(f'{len(orders)} trade(s) planned')
 
 ## Usage Examples
 
+## Research Safety Note
+
+- `research/btc_long_short_momentum_research.py` and `research/run_btc_long_short_momentum_research.py` are exploratory research-only modules.
+- They evaluate synthetic unlevered BTC short exposure for analysis and are not wired into live execution.
+- No live shorting behavior should be inferred from these reports; liquidation/risk-of-ruin effects are not modeled in this first pass.
+- `research/btc_crash_filter_research.py` and `research/run_btc_crash_filter_research.py` are also exploratory research-only modules.
+- Crash-filter overlays are evaluated for defensive timing research and are not deployable live strategy code.
+- `research/btc_crash_filter_reentry_research.py` and `research/run_btc_crash_filter_reentry_research.py` are exploratory re-entry studies on top of crash-filter logic.
+- Re-entry results are research artifacts only and are not live-trading deployment recommendations.
+
 ### Loading Historical Data
 
 ```python

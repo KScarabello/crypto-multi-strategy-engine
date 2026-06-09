@@ -523,6 +523,105 @@ Use `.gitignore` and `.env.example` to maintain safety.
 
 ---
 
+---
+
+## Data Quality & Survivorship-Bias Audit
+
+### Why crypto backtests can still suffer from survivorship bias
+
+When we backtest using only the coins that are **currently listed** on an exchange, we
+implicitly exclude every coin that delisted, collapsed, or got replaced before today.
+This creates upward-biased performance estimates because:
+
+- **Delisted coins are absent**: coins that went to zero or were removed from the exchange
+  have no data in the local cache.  Any strategy that would have held them is not penalized.
+- **Current-listing bias**: the set of coins available today is the set that *survived*
+  to today.  Historical strategies built on this set had the benefit of hindsight in
+  selecting only the survivors.
+- **Symbol renames**: e.g. MATIC → POL.  The pre-rename history (MATIC/USD) is absent;
+  only post-rename data (POL/USD from 2024-09) is stored.
+- **Late-listing effect**: newer coins have fewer years of data.  Backtests that start
+  in 2020 but include only coins listed later inadvertently reduce the competition for
+  momentum selection at early dates, potentially inflating measured alpha.
+
+### Why testing only current tradable coins overstates historical performance
+
+The strategy selects top-N assets by momentum score at each rebalance.  If five of the
+twenty candidates did not yet exist in 2020–2021, the actual historical competition was
+thinner than the current universe implies.  A strategy that ranks 2nd of 20 today might
+have ranked 2nd of 9 in 2020 — a very different selection pressure.
+
+Additionally, coins that topped out and crashed out of existence between 2020 and now
+would have been in the momentum universe at their peak and then delivered severe drawdowns.
+Omitting those from the historical test makes the strategy look less volatile and more
+selective than it really was.
+
+### How to run the audit
+
+```bash
+# Audit all local 4h CSV files (auto-discovers data/local/)
+.venv/bin/python -m research.audit_crypto_data_quality
+
+# Audit a specific set of symbols
+.venv/bin/python -m research.audit_crypto_data_quality --symbols BTC/USD ETH/USD SOL/USD
+
+# Use a different backtest start date or lookback
+.venv/bin/python -m research.audit_crypto_data_quality \
+    --backtest-start 2021-01-01 \
+    --min-lookback-bars 50 \
+    --stale-days 7
+
+# Skip the Markdown portfolio summary
+.venv/bin/python -m research.audit_crypto_data_quality --no-markdown
+```
+
+**Output files:**
+
+| File | Contents |
+|---|---|
+| `reports/crypto_data_quality_symbol_report.csv` | Per-symbol detailed metrics and quality label |
+| `reports/crypto_data_quality_portfolio_summary.md` | Portfolio-level survivorship and bias notes |
+
+### How to interpret the report
+
+**Quality labels** assigned to each symbol:
+
+| Label | Meaning |
+|---|---|
+| `GOOD` | Complete data, covers backtest start, enough lookback, not stale |
+| `LIMITED_HISTORY` | Symbol starts after configured backtest start, or too few bars for the strategy lookback |
+| `GAPPY` | >5% of expected bars are missing, or a single gap >48h |
+| `STALE` | Last bar is older than `--stale-days` (default 14) |
+| `NEEDS_REVIEW` | Minor issues: duplicate timestamps, zero-volume bars, or column-level NaNs |
+| `INVALID` | Structurally broken data: empty file, `high < low`, `close <= 0`, or `volume < 0` |
+
+**Key questions answered by the portfolio summary:**
+
+- **Earliest shared start**: the date from which *all* symbols have data.  Backtests
+  before this date implicitly use a smaller universe.
+- **Constraining symbols**: which specific coins push this date forward.
+- **Survivorship bias risk**: always `HIGH` for a current-listing-only universe.
+- **Engine behavior**: the backtest engine drops `close <= 0` rows silently and does
+  not forward-fill gaps.  Symbols below `min_history_bars` are silently excluded from
+  portfolio selection at early timestamps.
+
+### What limitations remain even after the audit
+
+1. **No delisted coin data**: we cannot retroactively add coins that no longer exist
+   on Kraken.  The audit flags this risk but cannot fix it.
+2. **Intra-bar path unknown**: OHLCV only provides bar-level prices; actual execution
+   quality within a bar is unobservable.
+3. **Wash trading / spoofed volume**: Kraken volume figures are not independently
+   verifiable.
+4. **Cross-exchange inconsistency**: all data is Kraken-only; another exchange would
+   show different history and availability dates.
+5. **Point-in-time universe impossible to fully reconstruct**: even with effort, coins
+   that completely ceased to exist before today may have no surviving data source.
+6. **Listing-date uncertainty**: the first candle in the API may not be the first day
+   a coin was genuinely tradable; early bars often have extreme spreads.
+
+---
+
 ## Support
 
 For questions or issues:

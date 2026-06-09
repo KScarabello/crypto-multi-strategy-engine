@@ -173,6 +173,9 @@ logs/
 .state/
 .pending/
 
+# Shadow validation state (paper-trade only, not for version control)
+shadow_state/
+
 # Cache files
 .cache/
 *.cache

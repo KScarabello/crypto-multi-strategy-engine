@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -33,6 +34,19 @@ from research.shadow.monitor import generate_monitor_report
 
 DEFAULT_STATE_DIR = Path("shadow_state")
 DEFAULT_DATA_DIR = Path("data/local")
+TIMEFRAME_HOURS = 4  # 4h bars
+
+
+def is_candle_complete(bar_ts: pd.Timestamp, timeframe_hours: int = TIMEFRAME_HOURS) -> bool:
+    """Return True only if the candle whose OPEN time is bar_ts has fully closed.
+
+    OHLCV timestamps in this repo represent candle-OPEN times (Kraken convention).
+    A 4h bar opening at 20:00 UTC closes at 00:00 UTC the next day.
+    The candle is complete only when: now_utc >= bar_ts + timeframe_hours.
+    """
+    now_utc = pd.Timestamp(datetime.now(timezone.utc))
+    candle_close_time = bar_ts + pd.Timedelta(hours=timeframe_hours)
+    return now_utc >= candle_close_time
 
 
 def _ensure_state_dirs(state_dir: Path) -> None:
@@ -65,9 +79,24 @@ def process_bar(
     candidates: list[str] | None = None,
     dry_run: bool = False,
 ) -> dict[str, BarDecision]:
-    """Process one bar for all specified candidates."""
+    """Process one bar for all specified candidates.
+
+    CANDLE COMPLETENESS GUARD: OHLCV timestamps represent candle-OPEN times.
+    A 4h bar labeled 20:00 UTC closes at 00:00 UTC the next day.
+    Bars are rejected unless now_utc >= bar_ts + 4h (candle fully closed).
+    """
     assert_all_spec_integrity()
     _ensure_state_dirs(state_dir)
+
+    # Hard guard: reject incomplete candles
+    if not is_candle_complete(bar_ts, TIMEFRAME_HOURS):
+        candle_close = bar_ts + pd.Timedelta(hours=TIMEFRAME_HOURS)
+        now_utc = datetime.now(timezone.utc)
+        print(
+            f"[GUARD] Rejecting bar {bar_ts} — candle not yet complete. "
+            f"Closes at {candle_close} UTC; current time {now_utc.strftime('%Y-%m-%dT%H:%M:%SZ')} UTC."
+        )
+        return {}
 
     candidate_list = candidates if candidates is not None else list(FROZEN_CANDIDATES.keys())
     decisions: dict[str, BarDecision] = {}
@@ -182,16 +211,17 @@ def process_bar(
 
 
 def _load_close_data(data_dir: Path) -> pd.DataFrame | None:
-    """Try to load close price data from data_dir."""
-    for pattern in ["close.parquet", "close.csv", "ohlcv.parquet", "prices.parquet"]:
-        path = data_dir / pattern
-        if path.exists():
-            if path.suffix == ".parquet":
-                return pd.read_parquet(path)
-            else:
-                return pd.read_csv(path, index_col=0, parse_dates=True)
+    """Load close price data using the canonical build_close_matrix function."""
+    try:
+        from research.universe_integrity_analysis import build_close_matrix, LIVE_FIVE_UNIVERSE
+        close = build_close_matrix(LIVE_FIVE_UNIVERSE, "4h", data_dir)
+        if close.empty:
+            return None
+        return close
+    except Exception:
+        pass
 
-    # Try per-symbol files
+    # Fallback: try per-symbol files
     close_frames = {}
     for sym in ["BTC/USD", "ETH/USD", "XRP/USD", "SOL/USD", "AVAX/USD"]:
         sym_clean = sym.replace("/", "_")
@@ -220,22 +250,38 @@ def run_from_start(
     state_dir: Path,
     dry_run: bool = False,
 ) -> None:
-    """Process all bars from prospective_start to the latest available data."""
+    """Process all COMPLETE bars from prospective_start to now.
+
+    CANDLE COMPLETENESS GUARD: Only bars whose close time (open + 4h) has passed
+    are eligible. Bars whose candle is still forming are silently skipped here
+    (process_bar also enforces this independently for single-bar calls).
+    """
     close = _load_close_data(data_dir)
     if close is None:
         print(f"[INFO] No close data found in {data_dir}. Cannot backfill.")
         return
 
     start_ts = pd.Timestamp(prospective_start)
-    available_bars = close.index[close.index >= start_ts]
+    all_bars = close.index[close.index >= start_ts]
 
-    if len(available_bars) == 0:
-        print(f"[INFO] No bars found from {prospective_start} onward.")
+    # Filter to only complete candles
+    complete_bars = [b for b in all_bars if is_candle_complete(b, TIMEFRAME_HOURS)]
+    incomplete = len(all_bars) - len(complete_bars)
+
+    if len(complete_bars) == 0:
+        print(f"[INFO] No complete bars found from {prospective_start} onward.")
+        if incomplete > 0:
+            print(f"[GUARD] {incomplete} bar(s) skipped — candle not yet complete.")
         return
 
-    print(f"[INFO] Processing {len(available_bars)} bars from {available_bars[0]} to {available_bars[-1]}")
+    print(
+        f"[INFO] Processing {len(complete_bars)} complete bars "
+        f"from {complete_bars[0]} to {complete_bars[-1]}"
+    )
+    if incomplete > 0:
+        print(f"[GUARD] {incomplete} bar(s) skipped — candle not yet complete.")
 
-    for bar_ts in available_bars:
+    for bar_ts in complete_bars:
         process_bar(
             bar_ts=bar_ts,
             close=close,
@@ -282,15 +328,58 @@ def run_latest_bar(
     )
 
 
+def reset_shadow_state(state_dir: Path, archive: bool = True) -> None:
+    """Safely reset shadow state portfolios and ledgers.
+
+    Archives existing state before deleting, preserving append-only evidence.
+    Frozen candidate specifications and hashes are NOT modified.
+
+    This is a research utility for use when the shadow validation period has
+    just begun and an integrity issue (e.g. incomplete candle processed) requires
+    a clean restart.
+
+    Args:
+        state_dir: Shadow state directory (default: shadow_state/)
+        archive: If True, copy existing state to state_dir/archive_{timestamp}/
+                 before clearing. Never silently overwrites prior archives.
+    """
+    if not state_dir.exists():
+        print("[RESET] No shadow state directory found. Nothing to reset.")
+        return
+
+    if archive:
+        now_tag = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        archive_dir = state_dir / f"archive_{now_tag}"
+        for sub in ["portfolios", "ledger", "decisions"]:
+            src = state_dir / sub
+            if src.exists():
+                shutil.copytree(src, archive_dir / sub)
+        print(f"[RESET] Archived existing state to {archive_dir}")
+
+    # Clear portfolios and ledger only — preserve archive dirs
+    for sub in ["portfolios", "ledger", "decisions"]:
+        sub_dir = state_dir / sub
+        if sub_dir.exists():
+            for f in sub_dir.iterdir():
+                if f.is_file():
+                    f.unlink()
+            print(f"[RESET] Cleared {sub_dir}")
+
+    print("[RESET] Shadow state cleared. Frozen specs and hashes are unchanged.")
+    print("[RESET] Re-run --from-start to rebuild from scratch.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Shadow validation runner for crypto momentum strategy."
     )
     parser.add_argument("--bar", type=str, default=None, help="Process exactly one bar (ISO timestamp)")
-    parser.add_argument("--from-start", action="store_true", help="Process all bars since PROSPECTIVE_START")
+    parser.add_argument("--from-start", action="store_true", help="Process all complete bars since PROSPECTIVE_START")
     parser.add_argument("--start", type=str, default=None, help="Override prospective start for backfill")
     parser.add_argument("--report", action="store_true", help="Generate monitoring report only")
     parser.add_argument("--dry-run", action="store_true", help="Print what would happen, don't update state")
+    parser.add_argument("--reset", action="store_true", help="Archive and clear shadow state (safe reset)")
+    parser.add_argument("--no-archive", action="store_true", help="Skip archive on reset (use with caution)")
     parser.add_argument("--data-dir", type=str, default="data/local", help="Data directory")
     parser.add_argument("--state-dir", type=str, default="shadow_state", help="Shadow state directory")
     args = parser.parse_args()
@@ -299,6 +388,10 @@ def main() -> None:
     data_dir = Path(args.data_dir)
 
     _ensure_state_dirs(state_dir)
+
+    if args.reset:
+        reset_shadow_state(state_dir, archive=not args.no_archive)
+        return
 
     if args.report:
         output_path = Path("reports/shadow_monitor_report.md")

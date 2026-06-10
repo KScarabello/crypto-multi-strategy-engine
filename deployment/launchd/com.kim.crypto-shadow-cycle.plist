@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  deployment/launchd/com.kim.crypto-shadow-cycle.plist
+  =====================================================
+  macOS LaunchAgent — research-only prospective shadow validation cycle.
+
+  This agent is RESEARCH-ONLY:
+    - Runs scripts/run_shadow_cycle.sh
+    - Refreshes OHLCV data via data.update_ohlcv (public Kraken REST, read-only)
+    - Runs shadow validation (no orders, no account state changes)
+    - Generates monitoring reports
+    - Never sources Kraken API credentials
+    - Never invokes live order execution
+    - Never resets or regenerates shadow state automatically
+    - Frozen candidate specifications and hashes are never modified
+
+  Schedule: 10 minutes after each 4h UTC candle boundary, in America/Phoenix (MST, UTC-7):
+    UTC candle boundaries: 00:00  04:00  08:00  12:00  16:00  20:00
+    UTC+10min:             00:10  04:10  08:10  12:10  16:10  20:10
+    MST (UTC-7):           17:10  21:10  01:10  05:10  09:10  13:10
+
+  IMPORTANT: __REPO_DIR__ is a placeholder. Run scripts/install_shadow_launchagent.sh
+  to substitute the real absolute path and install into ~/Library/LaunchAgents/.
+  Do not load this template file directly.
+-->
+<plist version="1.0">
+<dict>
+    <!-- Identity -->
+    <key>Label</key>
+    <string>com.kim.crypto-shadow-cycle</string>
+
+    <!-- Command: invoke the wrapper directly — no shell alias, no interactive PATH -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__REPO_DIR__/scripts/run_shadow_cycle.sh</string>
+    </array>
+
+    <!-- Working directory must be the repository root for Python module imports -->
+    <key>WorkingDirectory</key>
+    <string>__REPO_DIR__</string>
+
+    <!-- Schedule: 6 times per day, 10 min after each 4h UTC candle close -->
+    <!-- Times are in the Mac's LOCAL timezone (America/Phoenix = MST = UTC-7) -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <!-- 00:10 UTC → 17:10 MST -->
+        <dict>
+            <key>Hour</key>
+            <integer>17</integer>
+            <key>Minute</key>
+            <integer>10</integer>
+        </dict>
+        <!-- 04:10 UTC → 21:10 MST -->
+        <dict>
+            <key>Hour</key>
+            <integer>21</integer>
+            <key>Minute</key>
+            <integer>10</integer>
+        </dict>
+        <!-- 08:10 UTC → 01:10 MST -->
+        <dict>
+            <key>Hour</key>
+            <integer>1</integer>
+            <key>Minute</key>
+            <integer>10</integer>
+        </dict>
+        <!-- 12:10 UTC → 05:10 MST -->
+        <dict>
+            <key>Hour</key>
+            <integer>5</integer>
+            <key>Minute</key>
+            <integer>10</integer>
+        </dict>
+        <!-- 16:10 UTC → 09:10 MST -->
+        <dict>
+            <key>Hour</key>
+            <integer>9</integer>
+            <key>Minute</key>
+            <integer>10</integer>
+        </dict>
+        <!-- 20:10 UTC → 13:10 MST -->
+        <dict>
+            <key>Hour</key>
+            <integer>13</integer>
+            <key>Minute</key>
+            <integer>10</integer>
+        </dict>
+    </array>
+
+    <!-- LaunchAgent stdout/stderr (separate from wrapper's combined cycle log) -->
+    <key>StandardOutPath</key>
+    <string>__REPO_DIR__/logs/shadow_launchd_stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>__REPO_DIR__/logs/shadow_launchd_stderr.log</string>
+
+    <!-- Do not start immediately on load — only on schedule -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- Prevent rapid restart loops if the wrapper crashes -->
+    <key>ThrottleInterval</key>
+    <integer>300</integer>
+
+    <!-- Run as current user (LaunchAgent, not LaunchDaemon) -->
+    <!-- No UserName key — LaunchAgents always run as the loading user -->
+
+</dict>
+</plist>

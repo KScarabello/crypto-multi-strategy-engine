@@ -77,21 +77,70 @@ else
 fi
 
 # ---- Double-check safety invariants in the generated plist ---------------
+# Inspect ProgramArguments specifically — do NOT grep the whole file for
+# keywords like "backfill" or "shadow", because the plist template contains
+# harmless XML comments ("Never invokes historical backfill",
+# "Never modifies five-coin shadow portfolios") that are not executable
+# references and would cause false-positive aborts.
 
-if grep -q "backfill" "${GENERATED}"; then
-    echo "ERROR: backfill reference found in generated plist. Aborting."
-    rm -f "${GENERATED}"
-    exit 1
-fi
+GENERATED_PLIST="${GENERATED}" python3 <<'PYEOF'
+import os, sys, plistlib
 
-if grep -qi "place_order\|submit_order\|kraken.*key\|api_key\|secret" "${GENERATED}"; then
-    echo "ERROR: live execution or credential reference found. Aborting."
-    rm -f "${GENERATED}"
-    exit 1
-fi
+plist_path = os.environ["GENERATED_PLIST"]
+with open(plist_path, "rb") as fh:
+    plist = plistlib.load(fh)
 
-if grep -q "run_shadow_cycle\|shadow" "${GENERATED}"; then
-    echo "ERROR: shadow-cycle script reference found. This installer must not touch shadow. Aborting."
+prog_args = plist.get("ProgramArguments", [])
+REQUIRED_WRAPPER = "run_memecoin_collection_cycle.sh"
+
+FORBIDDEN_BACKFILL = [
+    "backfill_recent_memecoin_signals",
+    "research.memecoin_catcher.backfill",
+    "memecoin_backfilled_signal_events",
+]
+FORBIDDEN_SHADOW = [
+    "run_shadow_cycle",
+    "research.shadow",
+    "shadow_cycle",
+    "status_shadow_launchagent",
+    "install_shadow_launchagent",
+]
+FORBIDDEN_CREDENTIALS = [
+    "place_order", "submit_order", "kraken_api",
+    "api_key", "api_secret", "secret_key", "private_key",
+]
+
+# 1. ProgramArguments must invoke the exact wrapper.
+if not any(REQUIRED_WRAPPER in arg for arg in prog_args):
+    print(f"ERROR: ProgramArguments does not invoke {REQUIRED_WRAPPER}: {prog_args}")
+    sys.exit(1)
+
+for arg in prog_args:
+    # 2. No backfill executable.
+    for token in FORBIDDEN_BACKFILL:
+        if token in arg:
+            print(f"ERROR: Forbidden backfill executable '{token}' in ProgramArguments.")
+            sys.exit(2)
+    if "backfill" in arg.lower():
+        print(f"ERROR: Unexpected backfill reference in ProgramArguments: {arg!r}")
+        sys.exit(2)
+
+    # 3. No shadow executable.
+    for token in FORBIDDEN_SHADOW:
+        if token in arg:
+            print(f"ERROR: Forbidden shadow executable '{token}' in ProgramArguments.")
+            sys.exit(3)
+
+    # 4. No live-trading or credential executable.
+    for token in FORBIDDEN_CREDENTIALS:
+        if token in arg.lower():
+            print(f"ERROR: Forbidden credential/live-trading token '{token}' in ProgramArguments.")
+            sys.exit(4)
+
+print("  ProgramArguments: OK")
+PYEOF
+if [[ $? -ne 0 ]]; then
+    echo "ERROR: ProgramArguments safety check failed. Aborting."
     rm -f "${GENERATED}"
     exit 1
 fi

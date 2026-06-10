@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  deployment/launchd/com.kim.memecoin-collection-cycle.plist
+  ===========================================================
+  macOS LaunchAgent — research-only prospective memecoin collection cycle.
+
+  This agent is RESEARCH-ONLY:
+    - Runs scripts/run_memecoin_collection_cycle.sh only
+    - Reads public Kraken REST API (no authentication, no credentials)
+    - Appends new genuine prospective signals to data/memecoin_signal_history.csv
+    - Matures forward-return outcomes for previously collected signals
+    - Generates a genuine-events-only readiness report
+    - Never places live orders
+    - Never sources Kraken API credentials
+    - Never invokes historical backfill
+    - Never resets or truncates genuine event history
+    - Never modifies five-coin shadow portfolios
+    - Never modifies frozen candidate specifications or hashes
+    - Rule 1 definition is not changed by this scheduler
+
+  Schedule: every hour at 5 minutes past the hour in America/Phoenix (MST, UTC-7, no DST).
+    Local :05  → UTC :12
+    LaunchAgent StartCalendarInterval uses the Mac's LOCAL timezone.
+    A Minute-only entry (no Hour key) fires at :05 of every local hour.
+
+  IMPORTANT: /Users/kimscarabello/Desktop/Repos/crypto/crypto-multi-strategy is a placeholder. Run scripts/install_memecoin_launchagent.sh
+  to substitute the real absolute path and install into ~/Library/LaunchAgents/.
+  Do not load this template file directly with launchctl.
+-->
+<plist version="1.0">
+<dict>
+    <!-- Identity -->
+    <key>Label</key>
+    <string>com.kim.memecoin-collection-cycle</string>
+
+    <!-- Command: invoke the wrapper directly — no shell alias, no interactive PATH -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/kimscarabello/Desktop/Repos/crypto/crypto-multi-strategy/scripts/run_memecoin_collection_cycle.sh</string>
+    </array>
+
+    <!-- Working directory must be the repository root for Python module imports -->
+    <key>WorkingDirectory</key>
+    <string>/Users/kimscarabello/Desktop/Repos/crypto/crypto-multi-strategy</string>
+
+    <!-- Schedule: every hour at :05 local America/Phoenix time.
+         A StartCalendarInterval dict with only Minute fires at that minute
+         of every hour.  No Hour key = all 24 hours. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Minute</key>
+        <integer>5</integer>
+    </dict>
+
+    <!-- Dedicated launchd stdout/stderr (separate from the wrapper's cycle log) -->
+    <key>StandardOutPath</key>
+    <string>/Users/kimscarabello/Desktop/Repos/crypto/crypto-multi-strategy/logs/memecoin_launchd_stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/kimscarabello/Desktop/Repos/crypto/crypto-multi-strategy/logs/memecoin_launchd_stderr.log</string>
+
+    <!-- Do not start immediately on load — only on schedule -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- Prevent rapid restart loops if the wrapper crashes (5 minutes) -->
+    <key>ThrottleInterval</key>
+    <integer>300</integer>
+
+    <!-- Run as current user (LaunchAgent, not LaunchDaemon) -->
+    <!-- No UserName key — LaunchAgents always run as the loading user -->
+
+</dict>
+</plist>

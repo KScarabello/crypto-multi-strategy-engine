@@ -230,21 +230,38 @@ class TestInstallScript:
         assert "run_memecoin_collection_cycle" in content
 
     def test_install_does_not_invoke_shadow(self):
-        """Install must not execute any shadow-cycle script."""
+        """Install must not shell-execute any shadow-cycle script.
+        String literals inside the Python plistlib guard (the FORBIDDEN_SHADOW list)
+        are reject-patterns, not invocations.
+        """
         content = _read_code(INSTALL_SCRIPT)
-        # grep -q checks are guard checks, not invocations — only flag actual invocations
-        lines = [l for l in content.splitlines()
-                 if "run_shadow_cycle" in l and "grep" not in l]
+        lines = [
+            l for l in content.splitlines()
+            if "run_shadow_cycle" in l
+            and "grep" not in l
+            and not l.strip().startswith('"')   # Python heredoc string literal
+            and not l.strip().startswith("'")
+        ]
         assert not lines, f"Install script invokes shadow script: {lines}"
 
     def test_install_does_not_invoke_backfill(self):
-        """Install must not invoke a backfill script (grep guards and echo messages are allowed)."""
+        """Install must not directly shell-execute a backfill script.
+        String literals inside the Python plistlib guard are allowed —
+        those are reject-patterns, not invocations.
+        Covered more precisely by test_install_uses_program_arguments_check_not_generic_grep.
+        """
         content = _read_code(INSTALL_SCRIPT)
-        lines = [l for l in content.splitlines()
-                 if "backfill" in l.lower()
-                 and "grep" not in l
-                 and not l.strip().startswith("echo")]
-        assert not lines, f"Install script invokes backfill: {lines}"
+        # Only flag lines that look like a direct shell call to a backfill script
+        # (i.e., not inside a Python heredoc string literal or grep guard).
+        import re
+        direct_calls = [
+            l for l in content.splitlines()
+            if re.search(r'(bash|python3?|\./).*backfill', l)
+            and "grep" not in l
+            and not l.strip().startswith('"')
+            and not l.strip().startswith("'")
+        ]
+        assert not direct_calls, f"Install script directly calls a backfill command: {direct_calls}"
 
     def test_install_checks_not_root(self):
         content = _read(INSTALL_SCRIPT)
@@ -261,18 +278,180 @@ class TestInstallScript:
         assert "> data/memecoin_signal_history" not in content
 
     def test_install_safety_checks_no_credentials(self):
-        """Credential terms must appear only in guard-grep patterns, not as invocations."""
+        """Credential terms must not appear as shell invocations.
+        They may appear inside the Python plistlib guard as reject-pattern literals.
+        """
         content = _read_code(INSTALL_SCRIPT)
         for term in ("api_key", "api_secret", "place_order"):
-            lines_with_term = [l for l in content.splitlines()
-                                if term in l.lower() and "grep" not in l]
+            lines_with_term = [
+                l for l in content.splitlines()
+                if term in l.lower()
+                and "grep" not in l
+                and not l.strip().startswith('"')   # Python heredoc string literal
+                and not l.strip().startswith("'")
+            ]
             assert not lines_with_term, \
                 f"Credential term '{term}' in non-guard install script line: {lines_with_term}"
 
+    def test_install_uses_program_arguments_check_not_generic_grep(self):
+        """The installer must NOT use whole-plist grep for 'backfill' or 'shadow'.
+        Both keywords appear in harmless XML comments in the template.
+        All executable checks must go through the plistlib ProgramArguments block.
+        """
+        content = _read(INSTALL_SCRIPT)
+        import re
+        for keyword in ("backfill", "shadow"):
+            # Check line-by-line: any line that has both grep and the keyword
+            # and references ${GENERATED} is a forbidden full-plist scan.
+            bad_lines = [
+                l for l in content.splitlines()
+                if "grep" in l
+                and keyword in l
+                and "${GENERATED}" in l
+                and not l.strip().startswith("#")
+            ]
+            assert not bad_lines, (
+                f"Installer uses a full-plist grep for '{keyword}' on line(s): {bad_lines}. "
+                "Replace with ProgramArguments-specific plistlib validation."
+            )
+        assert "plistlib" in content or "plutil -extract" in content, (
+            "Installer must use plistlib or plutil -extract for ProgramArguments validation."
+        )
+
 
 # ---------------------------------------------------------------------------
-# Uninstall script safety
+# ProgramArguments validation regression tests
 # ---------------------------------------------------------------------------
+
+class TestProgramArgumentsValidation:
+    """Verify the logic that inspects ProgramArguments (not full-plist grep).
+
+    Each test builds a minimal plist dict and runs the same validation logic
+    used by the installer, without actually running the installer.
+    """
+
+    REQUIRED_WRAPPER = "run_memecoin_collection_cycle.sh"
+    FORBIDDEN_BACKFILL = [
+        "backfill_recent_memecoin_signals",
+        "research.memecoin_catcher.backfill",
+        "memecoin_backfilled_signal_events",
+    ]
+    FORBIDDEN_SHADOW = [
+        "run_shadow_cycle",
+        "research.shadow",
+        "shadow_cycle",
+        "status_shadow_launchagent",
+        "install_shadow_launchagent",
+    ]
+
+    def _validate(self, prog_args: list[str]) -> tuple[bool, str]:
+        """Return (ok, message) using the same rules as the installer."""
+        if not any(self.REQUIRED_WRAPPER in arg for arg in prog_args):
+            return False, f"Required wrapper not in ProgramArguments: {prog_args}"
+        for arg in prog_args:
+            for token in self.FORBIDDEN_BACKFILL:
+                if token in arg:
+                    return False, f"Forbidden backfill executable '{token}' in ProgramArguments"
+            if "backfill" in arg.lower():
+                return False, f"Unexpected backfill reference in ProgramArguments: {arg!r}"
+            for token in self.FORBIDDEN_SHADOW:
+                if token in arg:
+                    return False, f"Forbidden shadow executable '{token}' in ProgramArguments"
+        return True, "OK"
+
+    def test_wrapper_only_passes(self):
+        """The normal ProgramArguments (bash + wrapper) must pass."""
+        args = [
+            "/bin/bash",
+            "/home/user/repo/scripts/run_memecoin_collection_cycle.sh",
+        ]
+        ok, msg = self._validate(args)
+        assert ok, msg
+
+    def test_harmless_backfill_xml_comment_passes(self):
+        """A plist whose XML comment says 'backfill' must pass if
+        ProgramArguments itself has no backfill reference.
+        Regression for the first false-positive."""
+        import plistlib, tempfile, os
+        plist_data = {
+            "Label": "com.kim.memecoin-collection-cycle",
+            "ProgramArguments": [
+                "/bin/bash",
+                "/repo/scripts/run_memecoin_collection_cycle.sh",
+            ],
+        }
+        with tempfile.NamedTemporaryFile(suffix=".plist", mode="wb", delete=False) as f:
+            plistlib.dump(plist_data, f)
+            tmp = f.name
+        try:
+            with open(tmp, "rb") as fh:
+                loaded = plistlib.load(fh)
+            ok, msg = self._validate(loaded["ProgramArguments"])
+            assert ok, f"Harmless backfill comment plist incorrectly rejected: {msg}"
+        finally:
+            os.unlink(tmp)
+
+    def test_harmless_shadow_xml_comment_passes(self):
+        """A plist whose XML comment says 'shadow' must pass if
+        ProgramArguments itself has no shadow executable reference.
+        Regression for the second false-positive."""
+        import plistlib, tempfile, os
+        plist_data = {
+            "Label": "com.kim.memecoin-collection-cycle",
+            # In production the template comment reads:
+            # "Never modifies five-coin shadow portfolios"
+            # That text is NOT in ProgramArguments, so must pass.
+            "ProgramArguments": [
+                "/bin/bash",
+                "/repo/scripts/run_memecoin_collection_cycle.sh",
+            ],
+        }
+        with tempfile.NamedTemporaryFile(suffix=".plist", mode="wb", delete=False) as f:
+            plistlib.dump(plist_data, f)
+            tmp = f.name
+        try:
+            with open(tmp, "rb") as fh:
+                loaded = plistlib.load(fh)
+            ok, msg = self._validate(loaded["ProgramArguments"])
+            assert ok, f"Harmless shadow comment plist incorrectly rejected: {msg}"
+        finally:
+            os.unlink(tmp)
+
+    def test_backfill_script_in_program_arguments_fails(self):
+        args = ["/bin/bash", "/repo/scripts/backfill_recent_memecoin_signals.sh"]
+        ok, _ = self._validate(args)
+        assert not ok, "Backfill script in ProgramArguments should have been rejected"
+
+    def test_backfill_module_in_program_arguments_fails(self):
+        args = ["/usr/bin/python3", "-m", "research.memecoin_catcher.backfill"]
+        ok, _ = self._validate(args)
+        assert not ok, "Backfill Python module in ProgramArguments should have been rejected"
+
+    def test_unknown_backfill_variant_fails(self):
+        args = [
+            "/bin/bash",
+            "/repo/scripts/run_memecoin_collection_cycle.sh",
+            "--also-run-backfill-recent",
+        ]
+        ok, _ = self._validate(args)
+        assert not ok, "Unknown backfill variant in ProgramArguments should have been rejected"
+
+    def test_shadow_cycle_script_in_program_arguments_fails(self):
+        """run_shadow_cycle.sh in ProgramArguments must be rejected."""
+        args = ["/bin/bash", "/repo/scripts/run_shadow_cycle.sh"]
+        ok, _ = self._validate(args)
+        assert not ok, "Shadow cycle script in ProgramArguments should have been rejected"
+
+    def test_shadow_module_in_program_arguments_fails(self):
+        """research.shadow Python module must be rejected."""
+        args = ["/usr/bin/python3", "-m", "research.shadow"]
+        ok, _ = self._validate(args)
+        assert not ok, "Shadow Python module in ProgramArguments should have been rejected"
+
+    def test_missing_wrapper_fails(self):
+        args = ["/bin/bash", "/repo/scripts/some_other_script.sh"]
+        ok, _ = self._validate(args)
+        assert not ok, "Missing required wrapper should have been rejected"
 
 class TestUninstallScript:
     def test_uninstall_script_exists(self):

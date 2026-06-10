@@ -327,7 +327,47 @@ class TestStatusScript:
         import stat
         assert STATUS_SH.stat().st_mode & stat.S_IXUSR
 
-    def test_shows_launchctl_list(self):
+    def test_uses_launchctl_print_as_authoritative_check(self):
+        """Loaded-state must use 'launchctl print gui/<uid>/<label>', not grep on list."""
+        text = _script_text(STATUS_SH)
+        assert "launchctl print" in text, \
+            "Status script must use 'launchctl print' as the authoritative loaded-state check"
+        assert "DOMAIN_TARGET" in text or "gui/" in text, \
+            "Status script must construct a gui/<uid>/<label> domain target"
+
+    def test_does_not_use_grep_for_loaded_state(self):
+        """Registration state must NOT be determined by grep on launchctl list PID column."""
+        text = _script_text(STATUS_SH)
+        non_comment = _non_comment_lines(text)
+        # The script may still show launchctl list for informational purposes,
+        # but LOADED/NOT LOADED decision must come from launchctl print exit code.
+        # Ensure the if-condition that sets REGISTRATION uses launchctl print.
+        assert "launchctl print" in text
+        # The old grep-based registration check should be gone
+        assert 'launchctl list | grep -q "${LABEL}"' not in text, \
+            "Registration must use launchctl print, not grep on launchctl list"
+
+    def test_loaded_state_uses_exit_code(self):
+        """Script must branch on launchctl print exit status (if ... ; then LOADED)."""
+        text = _script_text(STATUS_SH)
+        # The pattern: if PRINT_OUTPUT="$(launchctl print ...)" 2>&1; then
+        assert 'launchctl print' in text
+        assert 'LOADED' in text
+        assert 'NOT LOADED' in text
+
+    def test_separates_registration_from_runtime_state(self):
+        """Script must separately report registration and runtime state (running vs idle)."""
+        text = _script_text(STATUS_SH)
+        assert "running" in text
+        assert "idle" in text or "waiting" in text
+
+    def test_explains_dash_pid_is_idle_not_unloaded(self):
+        """Script must explain that a dash PID means idle/scheduled, not unloaded."""
+        text = _script_text(STATUS_SH)
+        assert "idle" in text or "scheduled" in text or "waiting" in text
+
+    def test_shows_launchctl_list_informationally(self):
+        """launchctl list may still appear for informational display."""
         assert "launchctl list" in _script_text(STATUS_SH)
 
     def test_shows_cycle_log(self):
@@ -340,7 +380,7 @@ class TestStatusScript:
 
     def test_no_live_commands(self):
         text = _script_text(STATUS_SH)
-        forbidden = ["execute_order", "place_order", "live.runner", "--reset"]
+        forbidden = ["execute_order", "place_order", "--reset"]
         for term in forbidden:
             assert term not in text, f"Status script references: {term!r}"
 

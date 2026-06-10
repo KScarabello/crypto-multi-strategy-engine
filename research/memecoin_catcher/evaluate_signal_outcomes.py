@@ -52,6 +52,17 @@ HORIZON_CANDLES: dict[str, int] = {
 
 SIGNAL_KEY_COLUMNS: list[str] = ["snapshot_ts_utc", "pair_id", "ohlc_signal_type"]
 
+# Minimum elapsed seconds after signal time before a horizon outcome may be written.
+# Guards against computing outcomes from incomplete/in-progress candles.
+HORIZON_MATURITY_SECONDS: dict[str, int] = {
+    "15m": 15 * 60,
+    "1h": 60 * 60,
+    "4h": 4 * 60 * 60,
+    "8h": 8 * 60 * 60,
+    "12h": 12 * 60 * 60,
+    "24h": 24 * 60 * 60,
+}
+
 # Columns that may be filled in on later evaluation passes as candles become available.
 # evaluated_ts_utc is always refreshed; the rest are only written when blank → non-blank.
 REFRESHABLE_OUTCOME_COLUMNS: list[str] = [
@@ -119,6 +130,33 @@ def select_future_window(
 
 
 # ---------------------------------------------------------------------------
+# Maturity guards — hard UTC-aware checks
+# ---------------------------------------------------------------------------
+
+
+def is_horizon_mature(
+    signal_ts_unix: float,
+    horizon: str,
+    now_ts_unix: float | None = None,
+) -> bool:
+    """Return True only when the full horizon has elapsed since signal detection.
+
+    This is a hard guard that lives inside the evaluator logic (not only in
+    the scheduling wrapper) so that even if the evaluator is called early,
+    it will not write an outcome for an immature horizon.
+
+    Args:
+        signal_ts_unix: Unix timestamp of the detection event.
+        horizon: One of "15m", "1h", "4h", "8h", "12h", "24h".
+        now_ts_unix: Current time as Unix timestamp; defaults to time.time().
+    """
+    import time as _time
+    now = now_ts_unix if now_ts_unix is not None else _time.time()
+    required = HORIZON_MATURITY_SECONDS.get(horizon, 0)
+    return (now - signal_ts_unix) >= required
+
+
+# ---------------------------------------------------------------------------
 # Forward return computation
 # ---------------------------------------------------------------------------
 
@@ -126,12 +164,15 @@ def select_future_window(
 def compute_forward_returns(
     future_df: pd.DataFrame,
     signal_price: float,
+    signal_ts_unix: float | None = None,
+    now_ts_unix: float | None = None,
 ) -> dict[str, float]:
     """Compute percentage return at each horizon relative to *signal_price*.
 
     Uses the close price of the N-th future candle where N is the candle count
     for that horizon (e.g. 4 candles = 1 h at 15-min interval).  Leaves a
-    field blank (NaN) when fewer than N candles are available.
+    field blank (NaN) when fewer than N candles are available OR when the
+    full horizon has not yet elapsed (maturity guard).
     """
     results: dict[str, float] = {}
     if signal_price <= 0:
@@ -139,6 +180,12 @@ def compute_forward_returns(
 
     for horizon, n in HORIZON_CANDLES.items():
         col = f"future_ret_{horizon}_pct"
+        # Maturity guard: do not write outcome before horizon has fully elapsed
+        if signal_ts_unix is not None and not is_horizon_mature(
+            signal_ts_unix, horizon, now_ts_unix=now_ts_unix
+        ):
+            results[col] = float("nan")
+            continue
         if len(future_df) >= n:
             close_price = float(future_df.iloc[n - 1]["close"])
             results[col] = (close_price / signal_price - 1.0) * 100.0
@@ -310,7 +357,14 @@ def evaluate_signal_row(
     ohlc_df = parse_ohlc_response(payload, pair_id=pair_id)
     future_df = select_future_window(ohlc_df, float(signal_ts_unix))
 
-    forward_rets = compute_forward_returns(future_df, signal_price=signal_price)
+    import time as _time
+    now_ts_unix = _time.time()
+    forward_rets = compute_forward_returns(
+        future_df,
+        signal_price=signal_price,
+        signal_ts_unix=float(signal_ts_unix),
+        now_ts_unix=now_ts_unix,
+    )
     excursions = compute_excursions(
         future_df, signal_price=signal_price, ohlc_signal_type=ohlc_signal_type
     )

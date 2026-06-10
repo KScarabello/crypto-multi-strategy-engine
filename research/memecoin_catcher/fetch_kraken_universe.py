@@ -16,7 +16,9 @@ Usage:
 from __future__ import annotations
 
 import csv
+import json
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +31,8 @@ ASSET_PAIRS_URL = f"{KRAKEN_BASE_URL}/AssetPairs"
 TICKER_URL = f"{KRAKEN_BASE_URL}/Ticker"
 
 DEFAULT_SNAPSHOT_PATH = Path("data/kraken_universe_snapshot.csv")
+DEFAULT_UNIVERSE_SNAPSHOT_DIR = Path("data/universe_snapshots")
+UNIVERSE_META_PATH = Path("data/universe_snapshots/latest_universe_meta.json")
 
 # Quote currencies considered "USD-like"
 USD_LIKE_QUOTES: frozenset[str] = frozenset({"USD", "USDT", "USDC"})
@@ -342,8 +346,25 @@ def print_summary(rows: list[dict[str, Any]]) -> None:
 def run_kraken_universe_scan(
     output_path: Path = DEFAULT_SNAPSHOT_PATH,
     session: requests.Session | None = None,
+    snapshot_dir: Path = DEFAULT_UNIVERSE_SNAPSHOT_DIR,
+    meta_path: Path = UNIVERSE_META_PATH,
 ) -> list[dict[str, Any]]:
-    """Fetch, enrich, print summary and write CSV.  Returns the full rows list."""
+    """Fetch, enrich, print summary and write CSV.  Returns the full rows list.
+
+    Also writes an immutable timestamped snapshot to *snapshot_dir* and a
+    latest-metadata sidecar so other pipeline stages can read the
+    universe_snapshot_id and data_cutoff_timestamp.
+    """
+    now = datetime.now(tz=timezone.utc)
+    universe_snapshot_id = "univ_" + now.strftime("%Y%m%d_%H%M%S")
+    # data_cutoff_timestamp: start of the most-recently-completed 15-min candle
+    interval_s = 15 * 60
+    data_cutoff_unix = (int(now.timestamp()) // interval_s) * interval_s
+    data_cutoff_ts = datetime.fromtimestamp(data_cutoff_unix, tz=timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    collection_ts = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+
     LOGGER.info("Fetching Kraken asset pairs…")
     raw_pairs = fetch_asset_pairs(session=session)
 
@@ -361,6 +382,27 @@ def run_kraken_universe_scan(
 
     print_summary(rows)
     write_snapshot_csv(rows, output_path)
+
+    # --- immutable timestamped snapshot ---
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    ts_filename = f"kraken_universe_{now.strftime('%Y%m%d_%H%M%S')}.csv"
+    immutable_path = snapshot_dir / ts_filename
+    write_snapshot_csv(rows, immutable_path)
+    LOGGER.info("Immutable universe snapshot: %s", immutable_path)
+
+    # --- metadata sidecar ---
+    meta = {
+        "universe_snapshot_id": universe_snapshot_id,
+        "data_cutoff_timestamp": data_cutoff_ts,
+        "collection_timestamp": collection_ts,
+        "snapshot_file": str(immutable_path),
+        "latest_file": str(output_path),
+        "row_count": len(rows),
+    }
+    meta_path.parent.mkdir(parents=True, exist_ok=True)
+    meta_path.write_text(json.dumps(meta, indent=2))
+    LOGGER.info("Universe metadata written: %s", meta_path)
+
     return rows
 
 

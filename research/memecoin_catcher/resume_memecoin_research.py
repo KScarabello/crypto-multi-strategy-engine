@@ -155,22 +155,32 @@ class StepResult:
         success: bool,
         duration_s: float,
         skipped: bool = False,
+        skipped_reason: str = "",
         error: str = "",
     ) -> None:
         self.name = name
         self.success = success
         self.duration_s = duration_s
         self.skipped = skipped
+        self.skipped_reason = skipped_reason
         self.error = error
 
     def __str__(self) -> str:
-        if self.skipped:
-            status = "— skipped (dry-run)"
+        if self.skipped and self.skipped_reason == "dry_run":
+            status = "— SKIPPED (dry-run)"
+        elif self.skipped and self.skipped_reason:
+            status = f"— SKIPPED ({self.skipped_reason})"
+        elif self.skipped:
+            status = "— SKIPPED"
         elif self.success:
             status = "✓ OK"
         else:
             status = f"✗ FAILED: {self.error}"
         return f"  [{self.name}]  {self.duration_s:.1f}s  {status}"
+
+
+class _OptionalStepSkipped(Exception):
+    """Raised by optional pipeline steps when their module is unavailable."""
 
 
 def _run_step(
@@ -182,7 +192,7 @@ def _run_step(
     print(f"\n→ Step: {name}")
     if dry_run:
         print("  (dry-run: skipping execution)")
-        return StepResult(name=name, success=True, duration_s=0.0, skipped=True)
+        return StepResult(name=name, success=True, duration_s=0.0, skipped=True, skipped_reason="dry_run")
 
     t0 = time.monotonic()
     try:
@@ -190,6 +200,12 @@ def _run_step(
         elapsed = time.monotonic() - t0
         LOGGER.info("Step '%s' completed in %.1fs", name, elapsed)
         return StepResult(name=name, success=True, duration_s=elapsed)
+    except _OptionalStepSkipped as exc:
+        elapsed = time.monotonic() - t0
+        reason = str(exc) if str(exc) else "optional_module_unavailable"
+        LOGGER.info("Step '%s' skipped: %s", name, reason)
+        print(f"  — SKIPPED: {reason}")
+        return StepResult(name=name, success=True, duration_s=elapsed, skipped=True, skipped_reason=reason)
     except Exception as exc:
         elapsed = time.monotonic() - t0
         LOGGER.exception("Step '%s' failed after %.1fs: %s", name, elapsed, exc)
@@ -230,11 +246,10 @@ def _step_summarize_outcomes() -> None:
         )
         summarize_main()
     except ImportError:
-        LOGGER.warning(
-            "summarize_signal_outcomes not found in this repo; skipping summary step"
-        )
-        print(
-            "  (summarize_signal_outcomes not available in this repo — skipping)"
+        raise _OptionalStepSkipped(
+            "summarize_signal_outcomes module not found; "
+            "validation reports (validate_memecoin_candidate_rules.py and "
+            "memecoin_readiness_report.py) replace this step"
         )
 
 

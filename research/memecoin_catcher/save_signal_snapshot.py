@@ -15,6 +15,8 @@ Usage:
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,13 +25,23 @@ import pandas as pd
 
 LOGGER = logging.getLogger(__name__)
 
+SCANNER_VERSION = "1.0.0"
+
 DEFAULT_INPUT_PATH = Path("data/memecoin_candidates_ohlc_latest.csv")
 DEFAULT_SNAPSHOT_DIR = Path("data/memecoin_signal_snapshots")
 DEFAULT_HISTORY_PATH = Path("data/memecoin_signal_history.csv")
+UNIVERSE_META_PATH = Path("data/universe_snapshots/latest_universe_meta.json")
 
 ACTIVE_SIGNAL_TYPES = frozenset({"LONG_EXPLOSION", "REVERSAL_WATCH", "DUMPING"})
 
+# Spread filter threshold — must match rank_memecoin_candidates.MAX_SPREAD_PCT
+SPREAD_FILTER_MAX_PCT: float = 2.0
+# Minimum quote volume for liquidity flag — must match rank_memecoin_candidates.MIN_QUOTE_VOLUME_EST
+LIQUIDITY_MIN_QVOL: float = 10_000.0
+
 SNAPSHOT_COLUMNS: list[str] = [
+    # --- identity ---
+    "event_id",
     "snapshot_ts_utc",
     "pair_id",
     "wsname",
@@ -37,8 +49,20 @@ SNAPSHOT_COLUMNS: list[str] = [
     "quote",
     "scanner_label",
     "ohlc_signal_type",
+    # --- Rule 1 predicates (derived from detection-time features) ---
+    "is_volume_climax",
+    "is_clean_continuation",
+    # --- price / spread ---
     "last_price",
+    "bid",
+    "ask",
+    "spread_abs",
     "spread_pct",
+    "spread_passes_filter",
+    # --- liquidity ---
+    "quote_volume_est",
+    "liquidity_flag",
+    # --- market features ---
     "today_return_pct",
     "ret_15m_pct",
     "ret_1h_pct",
@@ -51,6 +75,16 @@ SNAPSHOT_COLUMNS: list[str] = [
     "dump_score",
     "reversal_watch_score",
     "primary_ohlc_score",
+    # --- provenance ---
+    "event_source",
+    "collection_mode",
+    "is_simulated",
+    "detection_timestamp",
+    "data_cutoff_timestamp",
+    "collection_timestamp",
+    "scanner_version",
+    "universe_snapshot_id",
+    "source_snapshot_path",
 ]
 
 
@@ -72,6 +106,49 @@ def format_snapshot_ts(dt: datetime) -> str:
 def format_snapshot_filename(dt: datetime) -> str:
     """Format a UTC datetime as the snapshot filename timestamp component."""
     return dt.strftime("%Y%m%d_%H%M%S")
+
+
+# ---------------------------------------------------------------------------
+# Provenance helpers
+# ---------------------------------------------------------------------------
+
+
+def compute_event_id(
+    pair_id: str,
+    ohlc_signal_type: str,
+    scanner_version: str,
+    data_cutoff_timestamp: str,
+) -> str:
+    """Return a 16-character hex event ID stable across repeated runs.
+
+    Based on SHA-256 of four key fields.  Uses data_cutoff_timestamp (the
+    15-minute OHLC boundary floor) so that two runs within the same 15-minute
+    window produce identical IDs for the same pair/signal/version — enabling
+    correct idempotent deduplication.  detection_timestamp (wall clock) is
+    intentionally excluded because it changes on every run.
+    """
+    raw = "|".join([
+        str(pair_id),
+        str(ohlc_signal_type),
+        str(scanner_version),
+        str(data_cutoff_timestamp),
+    ]).encode()
+    return hashlib.sha256(raw).hexdigest()[:16]
+
+
+def load_universe_meta(meta_path: Path = UNIVERSE_META_PATH) -> dict:
+    """Load the latest universe metadata sidecar, or return safe defaults."""
+    if meta_path.exists():
+        try:
+            return json.loads(meta_path.read_text())
+        except Exception:
+            pass
+    return {
+        "universe_snapshot_id": "univ_unknown",
+        "data_cutoff_timestamp": "",
+        "collection_timestamp": "",
+        "snapshot_file": "",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -111,10 +188,91 @@ def filter_active_signals(df: pd.DataFrame) -> pd.DataFrame:
     return df[mask].copy()
 
 
-def stamp_snapshot(df: pd.DataFrame, snapshot_ts: str) -> pd.DataFrame:
-    """Add snapshot_ts_utc column and reorder to SNAPSHOT_COLUMNS schema."""
+def _compute_spread_fields(row: pd.Series) -> dict:
+    """Derive spread_abs, spread_passes_filter, liquidity_flag from row data."""
+    bid = pd.to_numeric(row.get("bid"), errors="coerce")
+    ask = pd.to_numeric(row.get("ask"), errors="coerce")
+    spread_pct = pd.to_numeric(row.get("spread_pct"), errors="coerce")
+    qvol = pd.to_numeric(row.get("quote_volume_est"), errors="coerce")
+
+    import math
+    spread_abs = float(ask - bid) if (pd.notna(ask) and pd.notna(bid)) else float("nan")
+    passes = bool(pd.notna(spread_pct) and spread_pct <= SPREAD_FILTER_MAX_PCT)
+    liquid = bool(pd.notna(qvol) and not math.isnan(float(qvol)) and float(qvol) >= LIQUIDITY_MIN_QVOL)
+    return {
+        "spread_abs": spread_abs,
+        "spread_passes_filter": passes,
+        "liquidity_flag": liquid,
+    }
+
+
+def stamp_snapshot(
+    df: pd.DataFrame,
+    snapshot_ts: str,
+    universe_meta: dict | None = None,
+    collection_ts: str | None = None,
+) -> pd.DataFrame:
+    """Add snapshot_ts_utc, provenance, spread fields, Rule-1 predicates, and event_id;
+    then reorder to SNAPSHOT_COLUMNS schema."""
+    meta = universe_meta or {}
+    universe_snapshot_id = meta.get("universe_snapshot_id", "univ_unknown")
+    data_cutoff_ts = meta.get("data_cutoff_timestamp", "")
+    source_snapshot_path = meta.get("snapshot_file", "")
+    coll_ts = collection_ts or snapshot_ts
+
     out = df.copy()
     out["snapshot_ts_utc"] = snapshot_ts
+
+    # Spread-derived fields
+    spread_rows = out.apply(_compute_spread_fields, axis=1)
+    for col in ("spread_abs", "spread_passes_filter", "liquidity_flag"):
+        out[col] = [r[col] for r in spread_rows]
+
+    # Rule 1 predicate columns — derived from detection-time OHLC features.
+    # These are NOT new strategy parameters: the formulas are locked in
+    # analyze_signal_traits.py and backfill_recent_memecoin_signals.py.
+    # is_volume_climax  = volume_ratio_4h > 10
+    # is_clean_continuation = ret_15m_pct > 0 AND ret_1h_pct > 0 AND ret_4h_pct > 0
+    if "is_volume_climax" not in out.columns:
+        if "volume_ratio_4h" in out.columns:
+            vc = pd.to_numeric(out["volume_ratio_4h"], errors="coerce")
+            out["is_volume_climax"] = vc > 10
+        else:
+            out["is_volume_climax"] = None
+    if "is_clean_continuation" not in out.columns:
+        needed = ["ret_15m_pct", "ret_1h_pct", "ret_4h_pct"]
+        if all(c in out.columns for c in needed):
+            r15 = pd.to_numeric(out["ret_15m_pct"], errors="coerce")
+            r1h = pd.to_numeric(out["ret_1h_pct"], errors="coerce")
+            r4h = pd.to_numeric(out["ret_4h_pct"], errors="coerce")
+            out["is_clean_continuation"] = (r15 > 0) & (r1h > 0) & (r4h > 0)
+        else:
+            out["is_clean_continuation"] = None
+
+    # Provenance fields
+    out["event_source"] = "GENUINE_PROSPECTIVE"
+    out["collection_mode"] = "LIVE"
+    out["is_simulated"] = False
+    out["detection_timestamp"] = snapshot_ts
+    out["data_cutoff_timestamp"] = data_cutoff_ts
+    out["collection_timestamp"] = coll_ts
+    out["scanner_version"] = SCANNER_VERSION
+    out["universe_snapshot_id"] = universe_snapshot_id
+    out["source_snapshot_path"] = source_snapshot_path
+
+    # Stable event ID — computed last, after all provenance fields are set.
+    # Uses data_cutoff_timestamp (15-min floor) not detection_timestamp (wall clock)
+    # so two runs within the same OHLC window produce the same ID for the same event.
+    out["event_id"] = out.apply(
+        lambda r: compute_event_id(
+            pair_id=str(r.get("pair_id", "")),
+            ohlc_signal_type=str(r.get("ohlc_signal_type", "")),
+            scanner_version=r["scanner_version"],
+            data_cutoff_timestamp=r["data_cutoff_timestamp"],
+        ),
+        axis=1,
+    )
+
     missing = [c for c in SNAPSHOT_COLUMNS if c not in out.columns]
     for col in missing:
         out[col] = None
@@ -149,7 +307,14 @@ def append_to_history(
 
     Creates the file (with header) if it does not exist.
     Skips the append if snapshot_ts_utc is already present in the file.
-    Returns "created" or "appended".
+    If event_id is available, also skips individual rows whose event_id already
+    exists and logs them as SKIPPED.
+
+    Uses pandas concat to handle schema evolution: if the new rows have more
+    columns than the existing file, the file is rewritten with the unified
+    column set (old rows get NaN for new columns).
+
+    Returns "created", "appended", or "duplicate_skipped".
     """
     if not history_path.exists():
         history_path.parent.mkdir(parents=True, exist_ok=True)
@@ -157,18 +322,41 @@ def append_to_history(
         LOGGER.info("History file created: %s", history_path)
         return "created"
 
-    existing = pd.read_csv(history_path, dtype=str, nrows=0)
-    if "snapshot_ts_utc" in existing.columns:
-        existing_full = pd.read_csv(
-            history_path, dtype={"snapshot_ts_utc": str}, usecols=["snapshot_ts_utc"]
-        )
+    existing_full = pd.read_csv(history_path, dtype=str)
+
+    if "snapshot_ts_utc" in existing_full.columns:
+        # Whole-timestamp-level dedup (fast path: exact same snapshot_ts)
         if snapshot_ts in existing_full["snapshot_ts_utc"].values:
             LOGGER.warning(
                 "snapshot_ts_utc %s already in history; skipping append.", snapshot_ts
             )
             return "duplicate_skipped"
 
-    df.to_csv(history_path, mode="a", header=False, index=False)
+        # Event-ID-level dedup (catches same event re-collected at a different ts)
+        if "event_id" in df.columns and "event_id" in existing_full.columns:
+            existing_ids = set(existing_full["event_id"].dropna().astype(str))
+            dup_mask = df["event_id"].astype(str).isin(existing_ids)
+            n_dup = int(dup_mask.sum())
+            if n_dup:
+                for _, dup_row in df[dup_mask].iterrows():
+                    LOGGER.warning(
+                        "SKIPPED duplicate event_id=%s pair=%s ts=%s",
+                        dup_row.get("event_id"),
+                        dup_row.get("wsname"),
+                        dup_row.get("snapshot_ts_utc"),
+                    )
+                    print(
+                        f"  SKIPPED duplicate event_id={dup_row.get('event_id')} "
+                        f"pair={dup_row.get('wsname')} ts={dup_row.get('snapshot_ts_utc')}"
+                    )
+                df = df[~dup_mask]
+                if df.empty:
+                    return "duplicate_skipped"
+
+    # Use pandas concat for schema-safe append: handles column evolution so
+    # old rows keep NaN for new columns rather than producing a malformed CSV.
+    combined = pd.concat([existing_full, df], ignore_index=True, sort=False)
+    combined.to_csv(history_path, index=False)
     LOGGER.info("Appended %d rows to history: %s", len(df), history_path)
     return "appended"
 
@@ -224,6 +412,7 @@ def run_signal_snapshot(
     snapshot_dir: Path = DEFAULT_SNAPSHOT_DIR,
     history_path: Path = DEFAULT_HISTORY_PATH,
     now: datetime | None = None,
+    universe_meta_path: Path = UNIVERSE_META_PATH,
 ) -> tuple[pd.DataFrame, Path, str]:
     """Full pipeline: load → filter → stamp → write snapshot + history.
 
@@ -232,12 +421,20 @@ def run_signal_snapshot(
     dt = now if now is not None else utcnow()
     snapshot_ts = format_snapshot_ts(dt)
     snapshot_ts_str = format_snapshot_filename(dt)
+    collection_ts = snapshot_ts
+
+    universe_meta = load_universe_meta(universe_meta_path)
 
     raw = load_enriched_candidates(input_path)
     total_loaded = len(raw)
 
     signals = filter_active_signals(raw)
-    stamped = stamp_snapshot(signals, snapshot_ts=snapshot_ts)
+    stamped = stamp_snapshot(
+        signals,
+        snapshot_ts=snapshot_ts,
+        universe_meta=universe_meta,
+        collection_ts=collection_ts,
+    )
 
     snapshot_path = write_snapshot_file(stamped, snapshot_dir, snapshot_ts_str)
     history_action = append_to_history(stamped, history_path, snapshot_ts)

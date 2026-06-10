@@ -203,16 +203,27 @@ class TestCompletedCandleGuard:
         assert is_candle_complete(past_bar, timeframe_hours=4) is True
 
     def test_open_candle_rejected(self):
-        """A bar whose candle is still forming is rejected."""
-        from datetime import datetime, timezone
+        """A bar whose candle is still forming is rejected.
+
+        Uses a fixed injected UTC timestamp via mock so the test cannot
+        fail near a 4-hour boundary.  The wall clock is never read.
+
+        Fixed reference: now=2026-06-10T02:00:00Z
+          bar = floor(02:00 - 1h = 01:00, 4h) = 00:00 UTC
+          candle_close = 00:00 + 4h = 04:00 UTC
+          04:00 > 02:00 → candle NOT complete → is_candle_complete returns False ✓
+        """
+        from unittest.mock import patch
         from research.shadow.runner import is_candle_complete
         import pandas as pd
 
-        now_utc = datetime.now(timezone.utc)
-        # A bar that opened 1 hour ago — still 3 hours from close
-        recent_bar = pd.Timestamp(now_utc) - pd.Timedelta(hours=1)
-        recent_bar = recent_bar.floor("4h").tz_localize("UTC") if recent_bar.tzinfo is None else recent_bar.floor("4h")
-        assert is_candle_complete(recent_bar, timeframe_hours=4) is False
+        fixed_now = pd.Timestamp("2026-06-10T02:00:00+00:00")
+        # Bar at the most recent 4h boundary before fixed_now - 1h
+        recent_bar = (fixed_now - pd.Timedelta(hours=1)).floor("4h")  # 2026-06-10T00:00:00Z
+
+        with patch("research.shadow.runner.datetime") as mock_dt:
+            mock_dt.now.return_value = fixed_now.to_pydatetime()
+            assert is_candle_complete(recent_bar, timeframe_hours=4) is False
 
     def test_accepted_only_after_close_time(self):
         """A bar is not accepted until now_utc >= bar_open + 4h."""

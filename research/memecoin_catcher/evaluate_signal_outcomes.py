@@ -81,6 +81,18 @@ REFRESHABLE_OUTCOME_COLUMNS: list[str] = [
     "evaluated_ts_utc",
 ]
 
+HORIZON_OUTCOME_COLUMNS: dict[str, tuple[str, str]] = {
+    "15m": ("future_ret_15m_pct", "outcome_15m"),
+    "1h": ("future_ret_1h_pct", "outcome_1h"),
+    "4h": ("future_ret_4h_pct", "outcome_4h"),
+    "24h": ("future_ret_24h_pct", "outcome_24h"),
+}
+
+HORIZON_EXCURSION_COLUMNS: dict[str, tuple[str, str]] = {
+    "4h": ("max_favorable_4h_pct", "max_adverse_4h_pct"),
+    "24h": ("max_favorable_24h_pct", "max_adverse_24h_pct"),
+}
+
 
 # ---------------------------------------------------------------------------
 # Public OHLC fetcher (adds `since` support over the enrichment module's version)
@@ -424,6 +436,54 @@ def _is_blank(val: Any) -> bool:
         return False
 
 
+def _row_key(row: pd.Series) -> tuple[str, str, str]:
+    """Return canonical unique key tuple for a signal/outcome row."""
+    return tuple(str(row[c]) for c in SIGNAL_KEY_COLUMNS)
+
+
+def _pending_mature_horizons(
+    signal_row: pd.Series,
+    existing_row: pd.Series | None,
+    now_ts_unix: float,
+) -> tuple[list[str], bool]:
+    """Return (pending_horizons, has_any_mature_horizon).
+
+    A horizon is pending when it is mature and at least one required output
+    field for that horizon is still blank in the existing outcomes row.
+    """
+    snapshot_ts = str(signal_row.get("snapshot_ts_utc", ""))
+    try:
+        signal_dt = datetime.strptime(snapshot_ts, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc
+        )
+        signal_ts_unix = float(signal_dt.timestamp())
+    except (TypeError, ValueError):
+        return ["15m", "1h", "4h", "24h"], True
+
+    pending: list[str] = []
+    has_any_mature = False
+
+    for horizon in ("15m", "1h", "4h", "24h"):
+        if not is_horizon_mature(signal_ts_unix, horizon, now_ts_unix=now_ts_unix):
+            continue
+        has_any_mature = True
+
+        # For new rows (no existing outcome row), mature horizons are pending.
+        if existing_row is None:
+            pending.append(horizon)
+            continue
+
+        ret_col, out_col = HORIZON_OUTCOME_COLUMNS[horizon]
+        needed_cols: list[str] = [ret_col, out_col]
+        if horizon in HORIZON_EXCURSION_COLUMNS:
+            needed_cols.extend(HORIZON_EXCURSION_COLUMNS[horizon])
+
+        if any(_is_blank(existing_row.get(col)) for col in needed_cols):
+            pending.append(horizon)
+
+    return pending, has_any_mature
+
+
 def upsert_outcome_rows(
     existing_df: pd.DataFrame,
     evaluated_df: pd.DataFrame,
@@ -515,6 +575,9 @@ def write_all_outcomes(
 
 def print_outcome_summary(
     signals_loaded: int,
+    signals_evaluated: int,
+    signals_skipped_complete: int,
+    signals_skipped_immature: int,
     n_added: int,
     n_updated: int,
     n_skipped: int,
@@ -528,6 +591,9 @@ def print_outcome_summary(
 
     print("\nMemecoin signal outcome evaluator")
     print(f"  signals loaded                           : {signals_loaded}")
+    print(f"  signals evaluated (network fetch)        : {signals_evaluated}")
+    print(f"  signals skipped (already complete)       : {signals_skipped_complete}")
+    print(f"  signals skipped (all horizons immature)  : {signals_skipped_immature}")
     print(f"  new outcome rows added                   : {n_added}")
     print(f"  existing outcome rows updated            : {n_updated}")
     print(f"  existing rows skipped (no new fields)    : {n_skipped}")
@@ -572,6 +638,7 @@ def run_outcome_evaluation(
     output_path: Path = DEFAULT_OUTPUT_PATH,
     interval: int = DEFAULT_INTERVAL_MINUTES,
     fetcher: Callable[[str, int, int | None], dict[str, Any]] = fetch_ohlc,
+    progress_every: int = 250,
 ) -> pd.DataFrame:
     """Evaluate all signals, upsert results, write full outcomes file."""
     signals = load_signal_history(input_path)
@@ -579,28 +646,90 @@ def run_outcome_evaluation(
 
     existing = load_existing_outcomes(output_path)
     now_ts = datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    now_ts_unix = datetime.now(tz=timezone.utc).timestamp()
+
+    existing_by_key: dict[tuple[str, str, str], pd.Series] = {}
+    if not existing.empty and all(c in existing.columns for c in SIGNAL_KEY_COLUMNS):
+        for _, erow in existing.iterrows():
+            existing_by_key[_row_key(erow)] = erow
+
+    signals_evaluated = 0
+    signals_skipped_complete = 0
+    signals_skipped_immature = 0
+    progress_every = max(int(progress_every), 1)
 
     results: list[dict[str, Any]] = []
-    for _, row in signals.iterrows():
+    for i, row in enumerate(signals.itertuples(index=False), start=1):
+        row_series = pd.Series(row._asdict())
+        key = _row_key(row_series)
+        existing_row = existing_by_key.get(key)
+        pending_horizons, has_any_mature_horizon = _pending_mature_horizons(
+            row_series, existing_row, now_ts_unix=now_ts_unix
+        )
+
+        # Existing row with no mature pending fields is complete for all matured horizons.
+        if existing_row is not None and not pending_horizons:
+            signals_skipped_complete += 1
+            if i % progress_every == 0:
+                print(
+                    f"  Progress: {i}/{signals_loaded} rows scanned | "
+                    f"evaluated={signals_evaluated} complete_skips={signals_skipped_complete} "
+                    f"immature_skips={signals_skipped_immature}"
+                )
+            continue
+
+        # New row where no horizons are mature yet: append blank outcome row without fetch.
+        if existing_row is None and not has_any_mature_horizon:
+            outcome_fields = _blank_outcomes()
+            outcome_fields["evaluated_ts_utc"] = now_ts
+            result_row = row_series.to_dict()
+            result_row.update(outcome_fields)
+            results.append(result_row)
+            signals_skipped_immature += 1
+            if i % progress_every == 0:
+                print(
+                    f"  Progress: {i}/{signals_loaded} rows scanned | "
+                    f"evaluated={signals_evaluated} complete_skips={signals_skipped_complete} "
+                    f"immature_skips={signals_skipped_immature}"
+                )
+            continue
+
         try:
             outcome_fields = evaluate_signal_row(
-                row=row, interval=interval, fetcher=fetcher
+                row=row_series, interval=interval, fetcher=fetcher
             )
+            signals_evaluated += 1
         except Exception as exc:  # pragma: no cover — defensive wrapper
-            LOGGER.warning("Outcome eval failed for %s: %s", row.get("pair_id"), exc)
+            LOGGER.warning("Outcome eval failed for %s: %s", row_series.get("pair_id"), exc)
             outcome_fields = _blank_outcomes()
 
         outcome_fields["evaluated_ts_utc"] = now_ts
-        result_row = row.to_dict()
+        result_row = row_series.to_dict()
         result_row.update(outcome_fields)
         results.append(result_row)
+
+        if i % progress_every == 0:
+            print(
+                f"  Progress: {i}/{signals_loaded} rows scanned | "
+                f"evaluated={signals_evaluated} complete_skips={signals_skipped_complete} "
+                f"immature_skips={signals_skipped_immature}"
+            )
 
     evaluated_df = pd.DataFrame(results) if results else pd.DataFrame()
 
     result_df, n_added, n_updated, n_skipped = upsert_outcome_rows(existing, evaluated_df)
     write_all_outcomes(result_df, output_path)
 
-    print_outcome_summary(signals_loaded, n_added, n_updated, n_skipped, result_df)
+    print_outcome_summary(
+        signals_loaded,
+        signals_evaluated,
+        signals_skipped_complete,
+        signals_skipped_immature,
+        n_added,
+        n_updated,
+        n_skipped,
+        result_df,
+    )
     return result_df
 
 

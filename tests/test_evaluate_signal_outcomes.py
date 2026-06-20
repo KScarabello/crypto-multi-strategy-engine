@@ -6,6 +6,7 @@ Unit tests only; no live network calls.
 from __future__ import annotations
 
 import ast
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -515,6 +516,162 @@ def test_row_count_stable_when_only_updating(tmp_path: Path) -> None:
 
     loaded = pd.read_csv(output_path)
     assert len(loaded) == 2
+
+
+def test_skips_already_complete_rows_without_fetch(tmp_path: Path) -> None:
+    """Rows complete for all mature horizons should not trigger network fetch."""
+    input_path = tmp_path / "signals.csv"
+    output_path = tmp_path / "outcomes.csv"
+
+    snapshot_ts = "2025-05-28T21:30:00Z"
+    signals = _make_signals_df([(snapshot_ts, "DONEUSD", "LONG_EXPLOSION")])
+    signals["last_price"] = _SIGNAL_PRICE
+    signals.to_csv(input_path, index=False)
+
+    existing = signals.copy()
+    existing["future_ret_15m_pct"] = 1.0
+    existing["future_ret_1h_pct"] = 2.0
+    existing["future_ret_4h_pct"] = 3.0
+    existing["future_ret_24h_pct"] = 4.0
+    existing["max_favorable_4h_pct"] = 1.0
+    existing["max_adverse_4h_pct"] = -1.0
+    existing["max_favorable_24h_pct"] = 1.5
+    existing["max_adverse_24h_pct"] = -1.5
+    existing["outcome_15m"] = "SUCCESS"
+    existing["outcome_1h"] = "SUCCESS"
+    existing["outcome_4h"] = "SUCCESS"
+    existing["outcome_24h"] = "SUCCESS"
+    existing["evaluated_ts_utc"] = "2025-05-29T00:00:00Z"
+    existing.to_csv(output_path, index=False)
+
+    calls = {"n": 0}
+
+    def fake_fetcher(pair_id: str, interval: int, since: int | None = None) -> dict:
+        calls["n"] += 1
+        return _make_ohlc_payload(pair_id, _make_future_df(96))
+
+    run_outcome_evaluation(
+        input_path=input_path,
+        output_path=output_path,
+        fetcher=fake_fetcher,
+        progress_every=1,
+    )
+
+    assert calls["n"] == 0
+
+
+def test_skips_immature_new_rows_without_fetch(tmp_path: Path) -> None:
+    """New rows with no mature horizons are appended blank without network calls."""
+    input_path = tmp_path / "signals.csv"
+    output_path = tmp_path / "outcomes.csv"
+
+    recent_ts = (datetime.now(timezone.utc) - timedelta(seconds=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    signals = _make_signals_df([(recent_ts, "IMMUSD", "LONG_EXPLOSION")])
+    signals["last_price"] = _SIGNAL_PRICE
+    signals.to_csv(input_path, index=False)
+
+    calls = {"n": 0}
+
+    def fake_fetcher(pair_id: str, interval: int, since: int | None = None) -> dict:
+        calls["n"] += 1
+        return _make_ohlc_payload(pair_id, _make_future_df(96))
+
+    run_outcome_evaluation(
+        input_path=input_path,
+        output_path=output_path,
+        fetcher=fake_fetcher,
+        progress_every=1,
+    )
+
+    loaded = pd.read_csv(output_path)
+    assert len(loaded) == 1
+    assert calls["n"] == 0
+    assert pd.isna(loaded.iloc[0]["future_ret_15m_pct"])
+    assert loaded.iloc[0]["outcome_15m"] in ("", None) or pd.isna(loaded.iloc[0]["outcome_15m"])
+
+
+def test_newly_mature_incomplete_rows_are_evaluated(tmp_path: Path) -> None:
+    """Rows with mature blank horizons must still be re-evaluated."""
+    input_path = tmp_path / "signals.csv"
+    output_path = tmp_path / "outcomes.csv"
+
+    mature_ts = _SIGNAL_TS_UTC
+    signals = _make_signals_df([(mature_ts, "MATUSD", "LONG_EXPLOSION")])
+    signals["last_price"] = _SIGNAL_PRICE
+    signals.to_csv(input_path, index=False)
+
+    existing = signals.copy()
+    existing["future_ret_15m_pct"] = 1.0
+    existing["future_ret_1h_pct"] = 1.2
+    existing["future_ret_4h_pct"] = float("nan")
+    existing["future_ret_24h_pct"] = float("nan")
+    existing["max_favorable_4h_pct"] = float("nan")
+    existing["max_adverse_4h_pct"] = float("nan")
+    existing["max_favorable_24h_pct"] = float("nan")
+    existing["max_adverse_24h_pct"] = float("nan")
+    existing["outcome_15m"] = "SUCCESS"
+    existing["outcome_1h"] = "SUCCESS"
+    existing["outcome_4h"] = ""
+    existing["outcome_24h"] = ""
+    existing["evaluated_ts_utc"] = "2025-05-29T00:00:00Z"
+    existing.to_csv(output_path, index=False)
+
+    calls = {"n": 0}
+    payload = _make_ohlc_payload("MATUSD", _make_future_df(96))
+
+    def fake_fetcher(pair_id: str, interval: int, since: int | None = None) -> dict:
+        calls["n"] += 1
+        return payload
+
+    run_outcome_evaluation(
+        input_path=input_path,
+        output_path=output_path,
+        fetcher=fake_fetcher,
+        progress_every=1,
+    )
+
+    loaded = pd.read_csv(output_path)
+    assert calls["n"] == 1
+    assert pd.notna(loaded.iloc[0]["future_ret_4h_pct"])
+    assert loaded.iloc[0]["outcome_4h"] in ("SUCCESS", "FAILURE", "FLAT")
+
+
+def test_progress_logging_is_emitted(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Stage-F evaluator should print progress lines for operational visibility."""
+    input_path = tmp_path / "signals.csv"
+    output_path = tmp_path / "outcomes.csv"
+
+    signals = _make_signals_df(
+        [("2025-05-28T21:30:00Z", f"P{i}", "LONG_EXPLOSION") for i in range(3)]
+    )
+    signals["last_price"] = _SIGNAL_PRICE
+    signals.to_csv(input_path, index=False)
+
+    existing = signals.copy()
+    existing["future_ret_15m_pct"] = 1.0
+    existing["future_ret_1h_pct"] = 2.0
+    existing["future_ret_4h_pct"] = 3.0
+    existing["future_ret_24h_pct"] = 4.0
+    existing["max_favorable_4h_pct"] = 1.0
+    existing["max_adverse_4h_pct"] = -1.0
+    existing["max_favorable_24h_pct"] = 1.5
+    existing["max_adverse_24h_pct"] = -1.5
+    existing["outcome_15m"] = "SUCCESS"
+    existing["outcome_1h"] = "SUCCESS"
+    existing["outcome_4h"] = "SUCCESS"
+    existing["outcome_24h"] = "SUCCESS"
+    existing["evaluated_ts_utc"] = "2025-05-29T00:00:00Z"
+    existing.to_csv(output_path, index=False)
+
+    run_outcome_evaluation(
+        input_path=input_path,
+        output_path=output_path,
+        fetcher=lambda pair_id, interval, since=None: _make_ohlc_payload(pair_id, _make_future_df(96)),
+        progress_every=1,
+    )
+
+    captured = capsys.readouterr()
+    assert "Progress:" in captured.out
 
 
 # ---------------------------------------------------------------------------

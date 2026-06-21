@@ -190,3 +190,10 @@ shadow_state/
 backups/
 
 *.csv
+
+# Repo hygiene: generated/misplaced local artifacts
+deployment/launchd/*.generated.plist
+data/latest_universe_meta.json
+install_memecoin_launchagent.sh
+status_memecoin_launchagent.sh
+test_memecoin_launchagent_safety.py

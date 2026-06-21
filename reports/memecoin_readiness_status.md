@@ -1,5 +1,5 @@
 # Memecoin Catcher — Readiness Status Report
-Generated: 2026-06-10T04:23:39Z
+Generated: 2026-06-21T01:06:16Z
 
 ## Data Provenance
 - Genuine prospective events and simulated backfill events are **separate files**.
@@ -8,21 +8,21 @@ Generated: 2026-06-10T04:23:39Z
 ## Event Counts
 | Metric | Value |
 |---|---|
-| Genuine signal rows | 189 |
+| Genuine signal rows | 5706 |
 | Simulated backfill rows (EXCLUDED from gates) | 192 |
-| Newest genuine detection timestamp | 2026-06-10T04:08:38Z |
+| Newest genuine detection timestamp | 2026-06-21T01:05:59Z |
 | Oldest genuine detection timestamp | 2026-05-29T04:18:14Z |
-| Distinct genuine collection days | 5 |
-| Distinct symbols (genuine) | 144 |
+| Distinct genuine collection days | 15 |
+| Distinct symbols (genuine) | 429 |
 | Duplicate event count | 0 |
 
 ## Outcome Completeness (Genuine Events)
 | Horizon | Complete | Incomplete |
 |---|---|---|
-| 15m | 172 | 17 |
-| 1h | 172 | 17 |
-| 4h | 166 | 23 |
-| 24h | 166 | 23 |
+| 15m | 5694 | 12 |
+| 1h | 5694 | 12 |
+| 4h | 5481 | 225 |
+| 24h | 5139 | 567 |
 
 ## Rule 1 Status
 Definition: `LONG_EXPLOSION + is_volume_climax=True + is_clean_continuation=False`
@@ -31,23 +31,23 @@ Definition: `LONG_EXPLOSION + is_volume_climax=True + is_clean_continuation=Fals
 
 | Metric | Value |
 |---|---|
-| Rule 1 total events (any horizon) | 21 |
-| Rule 1 matured-4h events (used by Gate A) | 17 |
-| Rule 1 date range | 2026-05-29T04:18:14Z -> 2026-06-01T04:43:46Z |
-| spread_pct available (detection-time, matured-4h events) | 17/17 (100.0%) |
+| Rule 1 total events (any horizon) | 348 |
+| Rule 1 matured-4h events (used by Gate A) | 336 |
+| Rule 1 date range | 2026-05-29T04:18:14Z -> 2026-06-20T21:05:36Z |
+| spread_pct available (detection-time, matured-4h events) | 336/336 (100.0%) |
 | bid/ask/spread_abs in candidates pipeline | False |
 | Spread field used | spread_pct (Kraken ticker detection-time) |
 
 ## Gate A Status (→ VALIDATION_READY)
-**Pass count: 1 / 10**
+**Pass count: 4 / 10**
 *(Gate A uses Rule 1 matured-4h events; simulated rows are excluded)*
 
 | Criterion | Threshold | Pass |
 |---|---|---|
-| Collection days | ≥ 30 | ❌ (5) |
-| Total genuine events | ≥ 500 | ❌ (189) |
-| Rule 1 events | ≥ 150 | ❌ (17) |
-| Rule 1 symbols | ≥ 25 | ❌ |
+| Collection days | ≥ 30 | ❌ (15) |
+| Total genuine events | ≥ 500 | ✓ (5706) |
+| Rule 1 events | ≥ 150 | ✓ (336) |
+| Rule 1 symbols | ≥ 25 | ✓ |
 | Top symbol ≤ 20% | ≤ 20% | ✓ |
 | Top day ≤ 20% | ≤ 20% | ❌ |
 | Rule 1 positive median | > 0 | ❌ |

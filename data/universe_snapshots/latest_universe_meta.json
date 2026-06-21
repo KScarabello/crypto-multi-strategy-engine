@@ -1,8 +1,8 @@
 {
-  "universe_snapshot_id": "univ_20260610_041015",
-  "data_cutoff_timestamp": "2026-06-10T04:00:00Z",
-  "collection_timestamp": "2026-06-10T04:10:15Z",
-  "snapshot_file": "data/universe_snapshots/kraken_universe_20260610_041015.csv",
+  "universe_snapshot_id": "univ_20260621_010553",
+  "data_cutoff_timestamp": "2026-06-21T01:00:00Z",
+  "collection_timestamp": "2026-06-21T01:05:53Z",
+  "snapshot_file": "data/universe_snapshots/kraken_universe_20260621_010553.csv",
   "latest_file": "data/kraken_universe_snapshot.csv",
   "row_count": 1552
 }

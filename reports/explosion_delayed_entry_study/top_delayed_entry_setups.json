@@ -1,0 +1,102 @@
+[
+  {
+    "setup": "AVOID_NO_FOLLOW_THROUGH",
+    "hold_bars": 6,
+    "n_trades": 7385,
+    "selection_rate": 0.32562232838823235,
+    "gross_return_mean_pct": 1.0315497276475296,
+    "net_return_mean_pct_50": 0.5315497276475295,
+    "net_win_rate_50": 0.48165199729180774,
+    "gross_win_rate": 0.5210561949898442
+  },
+  {
+    "setup": "BUY_AFTER_FOLLOW_THROUGH",
+    "hold_bars": 6,
+    "n_trades": 7385,
+    "selection_rate": 0.32562232838823235,
+    "gross_return_mean_pct": 1.0315497276475296,
+    "net_return_mean_pct_50": 0.5315497276475295,
+    "net_win_rate_50": 0.48165199729180774,
+    "gross_win_rate": 0.5210561949898442
+  },
+  {
+    "setup": "BUY_AT_EXPLOSION",
+    "hold_bars": 6,
+    "n_trades": 20211,
+    "selection_rate": 1.0,
+    "gross_return_mean_pct": 0.8115633655010558,
+    "net_return_mean_pct_50": 0.31156336550105573,
+    "net_win_rate_50": 0.48409282074118054,
+    "gross_win_rate": 0.5288704170995993
+  },
+  {
+    "setup": "BUY_AT_EXPLOSION",
+    "hold_bars": 2,
+    "n_trades": 20211,
+    "selection_rate": 1.0,
+    "gross_return_mean_pct": 0.6985559894470312,
+    "net_return_mean_pct_50": 0.19855598944703134,
+    "net_win_rate_50": 0.497600316659245,
+    "gross_win_rate": 0.5736974914650438
+  },
+  {
+    "setup": "AVOID_NO_FOLLOW_THROUGH",
+    "hold_bars": 2,
+    "n_trades": 7385,
+    "selection_rate": 0.32562232838823235,
+    "gross_return_mean_pct": 0.3539488323210379,
+    "net_return_mean_pct_50": -0.14605116767896206,
+    "net_win_rate_50": 0.45213270142180095,
+    "gross_win_rate": 0.5256601218686526
+  },
+  {
+    "setup": "BUY_AFTER_FOLLOW_THROUGH",
+    "hold_bars": 2,
+    "n_trades": 7385,
+    "selection_rate": 0.32562232838823235,
+    "gross_return_mean_pct": 0.3539488323210379,
+    "net_return_mean_pct_50": -0.14605116767896206,
+    "net_win_rate_50": 0.45213270142180095,
+    "gross_win_rate": 0.5256601218686526
+  },
+  {
+    "setup": "BUY_AT_EXPLOSION",
+    "hold_bars": 1,
+    "n_trades": 20211,
+    "selection_rate": 1.0,
+    "gross_return_mean_pct": 0.33581640970419324,
+    "net_return_mean_pct_50": -0.16418359029580679,
+    "net_win_rate_50": 0.44347137697293554,
+    "gross_win_rate": 0.5442085992776211
+  },
+  {
+    "setup": "AVOID_NO_FOLLOW_THROUGH",
+    "hold_bars": 1,
+    "n_trades": 7385,
+    "selection_rate": 0.32562232838823235,
+    "gross_return_mean_pct": 0.2899838795277882,
+    "net_return_mean_pct_50": -0.21001612047221174,
+    "net_win_rate_50": 0.4165199729180772,
+    "gross_win_rate": 0.5435341909275558
+  },
+  {
+    "setup": "BUY_AFTER_FOLLOW_THROUGH",
+    "hold_bars": 1,
+    "n_trades": 7385,
+    "selection_rate": 0.32562232838823235,
+    "gross_return_mean_pct": 0.2899838795277882,
+    "net_return_mean_pct_50": -0.21001612047221174,
+    "net_win_rate_50": 0.4165199729180772,
+    "gross_win_rate": 0.5435341909275558
+  },
+  {
+    "setup": "BUY_IF_NO_DEEP_PULLBACK",
+    "hold_bars": 6,
+    "n_trades": 13936,
+    "selection_rate": 0.6067387477998492,
+    "gross_return_mean_pct": 0.28896666107421265,
+    "net_return_mean_pct_50": -0.21103333892578732,
+    "net_win_rate_50": 0.4306831228473019,
+    "gross_win_rate": 0.4779707233065442
+  }
+]

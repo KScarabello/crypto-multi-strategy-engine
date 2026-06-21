@@ -1,5 +1,10 @@
 """Robustness validation for top-3 memecoin candidate entry rules.
 
+BACKFILL-ONLY VALIDATION:
+- This module evaluates simulated/backfilled events only.
+- It does not evaluate current genuine prospective evidence.
+- It is not used for Gate A readiness.
+
 Input:  data/memecoin_backfilled_signal_events.csv
 Outputs:
   reports/memecoin_candidate_rule_validation_summary.csv
@@ -36,6 +41,10 @@ TIME_SPLITS_PATH    = Path("reports/memecoin_candidate_rule_time_splits.csv")
 SYMBOL_ROBUST_PATH  = Path("reports/memecoin_candidate_rule_symbol_robustness.csv")
 FEE_STRESS_PATH     = Path("reports/memecoin_candidate_rule_fee_stress.csv")
 LIQUIDITY_PATH      = Path("reports/memecoin_candidate_rule_liquidity_diagnostics.csv")
+
+SOURCE_DATASET_LABEL = "data/memecoin_backfilled_signal_events.csv"
+SAMPLE_TYPE_LABEL = "SIMULATED_BACKFILL_ONLY"
+SCOPE_NOTE = "BACKFILL-ONLY VALIDATION — not current genuine prospective evidence"
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -102,8 +111,13 @@ def apply_fixed_4h(df: pd.DataFrame) -> pd.Series:
 
 
 def rule1_mask(df: pd.DataFrame) -> pd.Series:
-    """volume_climax_cc_false: VC=True AND CC=False."""
+    """Locked Rule 1: LONG_EXPLOSION AND VC=True AND CC=False."""
     mask = pd.Series([True] * len(df), index=df.index)
+    if "ohlc_signal_type" in df.columns:
+        mask &= df["ohlc_signal_type"].astype(str) == "LONG_EXPLOSION"
+    else:
+        logger.warning("ohlc_signal_type absent — Rule 1 will be empty.")
+        return pd.Series([False] * len(df), index=df.index)
     if "is_volume_climax" in df.columns:
         mask &= df["is_volume_climax"].fillna(False).astype(bool)
     else:
@@ -491,16 +505,20 @@ def print_results(
     print("=" * 80)
     print("  MEMECOIN CANDIDATE RULE VALIDATION — RESULTS")
     print("=" * 80)
+    print("  BACKFILL-ONLY VALIDATION — not current genuine prospective evidence.")
+    print("  Source dataset: data/memecoin_backfilled_signal_events.csv")
+    print("  Not used for Gate A readiness.")
+    print("  All n/backfill_n counts below are backfill-only sample counts.")
     print("  *** Research only. Not a validated trading strategy. ***")
 
     # Full-sample summary
     print("\n  ─── Full-Sample Metrics ─────────────────────────────────────────────")
-    print(f"  {'rule':<47} {'n':>5} {'avg':>7} {'med':>7} {'wr':>6} {'bwr':>6} {'f3':>6} {'f5':>6} {'avg-x':>8} {'avg-t1':>8}")
+    print(f"  {'rule':<47} {'backfill_n':>10} {'avg':>7} {'med':>7} {'wr':>6} {'bwr':>6} {'f3':>6} {'f5':>6} {'avg-x':>8} {'avg-t1':>8}")
     print("  " + "─" * 108)
     for _, r in summary.iterrows():
         marker = "★" if r.get("is_candidate") else " "
         print(
-            f"  {marker}{r['rule']:<46} {int(r['n']):>5} "
+            f"  {marker}{r['rule']:<46} {int(r['n']):>10} "
             f"{_fmt(r['avg']):>7} {_fmt(r['median']):>7} "
             f"{_fmtn(r['win_rate']):>6} {_fmtn(r['big_win_rate']):>6} "
             f"{_fmtn(r['fail_rate_3']):>6} {_fmtn(r['fail_rate_5']):>6} "
@@ -512,11 +530,11 @@ def print_results(
         print("\n  ─── Time-Split Flags ────────────────────────────────────────────────")
         halves = time_splits[time_splits["split_type"] == "half"]
         if not halves.empty:
-            print(f"  {'rule':<47} {'split':<28} {'n':>5} {'avg':>7} {'med':>7} {'f3':>6}")
+            print(f"  {'rule':<47} {'split':<28} {'backfill_n':>10} {'avg':>7} {'med':>7} {'f3':>6}")
             print("  " + "─" * 100)
             for _, r in halves.iterrows():
                 print(
-                    f"  {r['rule']:<47} {str(r['split_label']):<28} {int(r['n']):>5} "
+                    f"  {r['rule']:<47} {str(r['split_label']):<28} {int(r['n']):>10} "
                     f"{_fmt(r['avg']):>7} {_fmt(r['median']):>7} {_fmtn(r['fail_rate_3']):>6}"
                 )
 
@@ -547,7 +565,7 @@ def print_results(
             print(f"    Top contributing symbols:")
             top_syms = actual_syms.sort_values("contribution_to_avg", ascending=False).head(5)
             for _, r in top_syms.iterrows():
-                print(f"      {str(r['symbol']):<20} n={int(r['n']):>3}  avg={r['sym_avg']:+.2f}%  contrib={r['contribution_to_avg']:+.3f}%")
+                print(f"      {str(r['symbol']):<20} backfill_n={int(r['n']):>3}  avg={r['sym_avg']:+.2f}%  contrib={r['contribution_to_avg']:+.3f}%")
 
             # leave-one-out
             full_row = summary[summary["rule"] == rule]
@@ -559,20 +577,20 @@ def print_results(
                 for _, r in loso.sort_values("sym_avg").head(5).iterrows():
                     sym_name = str(r["symbol"]).replace("EXCL_", "")
                     delta = float(r["sym_avg"]) - full_avg
-                    print(f"      excl {sym_name:<18} n={int(r['n']):>3}  avg={r['sym_avg']:+.2f}%  Δ={delta:+.2f}%")
+                    print(f"      excl {sym_name:<18} backfill_n={int(r['n']):>3}  avg={r['sym_avg']:+.2f}%  Δ={delta:+.2f}%")
 
             top3_row = excl_rows[excl_rows["symbol"] == "EXCL_TOP3"]
             if not top3_row.empty:
-                print(f"    Excl top-3 symbols: n={int(top3_row.iloc[0]['n'])}  avg={top3_row.iloc[0]['sym_avg']:+.2f}%")
+                print(f"    Excl top-3 symbols: backfill_n={int(top3_row.iloc[0]['n'])}  avg={top3_row.iloc[0]['sym_avg']:+.2f}%")
 
     # Fee stress
     if not fee_stress.empty:
         print("\n  ─── Fee/Slippage Stress Test ────────────────────────────────────────")
-        print(f"  {'rule':<47} {'bps':>5} {'n':>5} {'avg_net':>9} {'med_net':>9} {'wr':>6} {'f3':>6}")
+        print(f"  {'rule':<47} {'bps':>5} {'backfill_n':>10} {'avg_net':>9} {'med_net':>9} {'wr':>6} {'f3':>6}")
         print("  " + "─" * 90)
         for _, r in fee_stress.iterrows():
             print(
-                f"  {r['rule']:<47} {int(r['fee_bps']):>5} {int(r['n']):>5} "
+                f"  {r['rule']:<47} {int(r['fee_bps']):>5} {int(r['n']):>10} "
                 f"{_fmt(r['avg_net']):>9} {_fmt(r['median_net']):>9} "
                 f"{_fmtn(r['win_rate']):>6} {_fmtn(r['fail_rate_3']):>6}"
             )
@@ -685,17 +703,30 @@ def main(
     print("\n" + "=" * 80)
     print("  Memecoin Candidate Rule Robustness Validation")
     print("=" * 80)
+    print("  BACKFILL-ONLY VALIDATION — not current genuine prospective evidence")
+    print("  Not used for Gate A readiness")
 
     df = load_events(input_path)
     n_complete = df["future_ret_4h_pct"].notna().sum()
     print(f"\n  Loaded {len(df)} events from {input_path}")
     print(f"  Completed 4h outcomes: {n_complete}")
 
-    summary       = build_validation_summary(df)
-    time_splits   = build_time_splits(df)
-    sym_robust    = build_symbol_robustness(df)
-    fee_stress    = build_fee_stress(df)
-    liquidity     = build_liquidity_diagnostics(df)
+    def _attach_backfill_provenance(data: pd.DataFrame) -> pd.DataFrame:
+        data = data.copy()
+        if "n" in data.columns and "backfill_n" not in data.columns:
+            data["backfill_n"] = data["n"]
+        data["source_dataset_path"] = str(input_path)
+        data["sample_type"] = SAMPLE_TYPE_LABEL
+        data["scope_label"] = SCOPE_NOTE
+        data["used_for_gate_a_readiness"] = False
+        data["is_current_genuine_evidence"] = False
+        return data
+
+    summary       = _attach_backfill_provenance(build_validation_summary(df))
+    time_splits   = _attach_backfill_provenance(build_time_splits(df))
+    sym_robust    = _attach_backfill_provenance(build_symbol_robustness(df))
+    fee_stress    = _attach_backfill_provenance(build_fee_stress(df))
+    liquidity     = _attach_backfill_provenance(build_liquidity_diagnostics(df))
 
     for path, data, label in [
         (summary_path,       summary,     "Validation summary"),

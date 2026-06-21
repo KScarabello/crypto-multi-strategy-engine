@@ -723,6 +723,12 @@ class TestNoBackfillInWrapper:
         assert "simulated" in content
         assert "never" in content or "excluded" in content
 
+    def test_stage_h_explicitly_labeled_backfill_only(self):
+        """Stage H wrapper log label must explicitly prevent confusion with genuine readiness evidence."""
+        wrapper = Path(__file__).parent.parent / "scripts" / "run_memecoin_collection_cycle.sh"
+        src = wrapper.read_text().lower()
+        assert "candidate rule validation (backfill-only; not gate a genuine evidence)" in src
+
 
 # ===========================================================================
 # Immutable timestamped snapshots

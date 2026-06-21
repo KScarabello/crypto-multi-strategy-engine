@@ -33,6 +33,7 @@ from research.memecoin_catcher.validate_memecoin_candidate_rules import (
     build_validation_summary,
     compute_stats,
     load_events,
+    main,
     rule1_mask,
     rule2_mask,
     rule3_mask,
@@ -145,10 +146,26 @@ def _make_guaranteed_df(events_per_rule: int = 42, seed: int = 7) -> pd.DataFram
 class TestRule1Mask:
     def test_requires_both_vc_true_and_cc_false(self):
         df = _make_df(n=4,
+                      ohlc_signal_type=["LONG_EXPLOSION"] * 4,
                       is_volume_climax=[True, True, False, False],
                       is_clean_continuation=[False, True, False, True])
         m = rule1_mask(df)
         assert list(m) == [True, False, False, False]
+
+    def test_requires_long_explosion(self):
+        df = _make_df(n=4,
+                      ohlc_signal_type=["LONG_EXPLOSION", "DUMPING", "LONG_EXPLOSION", "LONG_EXPLOSION"],
+                      is_volume_climax=[True, True, True, False],
+                      is_clean_continuation=[False, False, False, False])
+        m = rule1_mask(df)
+        assert list(m) == [True, False, True, False]
+
+    def test_missing_ohlc_signal_type_returns_all_false(self):
+        df = _make_df(n=4,
+                      is_volume_climax=[True, True, True, True],
+                      is_clean_continuation=[False, False, False, False]).drop(columns=["ohlc_signal_type"])
+        m = rule1_mask(df)
+        assert not m.any()
 
     def test_all_vc_true_cc_false(self):
         df = _make_df(n=3,
@@ -601,3 +618,59 @@ class TestMissingColumns:
         for _, r in liq.iterrows():
             assert r["spread_available"] == False
             assert r["qvol_available"] == False
+
+
+# ---------------------------------------------------------------------------
+# Backfill-only labeling and provenance
+# ---------------------------------------------------------------------------
+
+
+class TestBackfillOnlyLabeling:
+    def test_main_prints_backfill_only_warning(self, tmp_path, capsys):
+        df = _make_guaranteed_df(events_per_rule=8)
+        input_path = tmp_path / "memecoin_backfilled_signal_events.csv"
+        df.to_csv(input_path, index=False)
+
+        main(
+            input_path=input_path,
+            summary_path=tmp_path / "summary.csv",
+            time_splits_path=tmp_path / "time_splits.csv",
+            symbol_robust_path=tmp_path / "symbol.csv",
+            fee_stress_path=tmp_path / "fee.csv",
+            liquidity_path=tmp_path / "liq.csv",
+        )
+
+        out = capsys.readouterr().out.lower()
+        assert "backfill-only validation" in out
+        assert "not current genuine prospective evidence" in out
+        assert "not used for gate a readiness" in out
+        assert "backfill_n" in out
+
+    def test_summary_csv_has_backfill_provenance_columns(self, tmp_path):
+        df = _make_guaranteed_df(events_per_rule=8)
+        input_path = tmp_path / "memecoin_backfilled_signal_events.csv"
+        df.to_csv(input_path, index=False)
+
+        main(
+            input_path=input_path,
+            summary_path=tmp_path / "summary.csv",
+            time_splits_path=tmp_path / "time_splits.csv",
+            symbol_robust_path=tmp_path / "symbol.csv",
+            fee_stress_path=tmp_path / "fee.csv",
+            liquidity_path=tmp_path / "liq.csv",
+        )
+
+        summary = pd.read_csv(tmp_path / "summary.csv")
+        for col in [
+            "backfill_n",
+            "source_dataset_path",
+            "sample_type",
+            "scope_label",
+            "used_for_gate_a_readiness",
+            "is_current_genuine_evidence",
+        ]:
+            assert col in summary.columns
+
+        assert set(summary["sample_type"].astype(str).unique()) == {"SIMULATED_BACKFILL_ONLY"}
+        assert (summary["used_for_gate_a_readiness"] == False).all()  # noqa: E712
+        assert (summary["is_current_genuine_evidence"] == False).all()  # noqa: E712

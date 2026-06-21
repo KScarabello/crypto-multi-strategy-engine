@@ -281,9 +281,9 @@ run_stage "F: Evaluate outcomes (post-snapshot)" required \
 run_stage "G: Readiness report (genuine events only)" required \
     "${PYTHON}" -m research.memecoin_catcher.memecoin_readiness_report
 
-# Stage 8: Candidate rule validation (optional — uses backfilled events for research context)
+# Stage 8: Candidate rule validation (optional — BACKFILL-ONLY, not Gate A genuine evidence)
 if [[ $SKIP_VALIDATION -eq 0 ]]; then
-    run_stage "H: Candidate rule validation" optional \
+    run_stage "H: Candidate rule validation (BACKFILL-ONLY; NOT Gate A genuine evidence)" optional \
         "${PYTHON}" -m research.memecoin_catcher.validate_memecoin_candidate_rules
 fi
 

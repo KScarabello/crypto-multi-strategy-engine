@@ -1,0 +1,134 @@
+[
+  {
+    "setup": "BUY_AFTER_FOLLOW_THROUGH_STRICT",
+    "variant": "HIGH_BREAK_100_BPS",
+    "hold_bars": 6,
+    "direction": "LONG",
+    "n_events": 1688,
+    "gross_return_mean_pct": 1.4960309462609496,
+    "net_return_mean_pct_50": 0.9960309462609498,
+    "net_return_mean_pct_100": 0.4960309462609498,
+    "small_sample_warning": false
+  },
+  {
+    "setup": "BUY_AFTER_FOLLOW_THROUGH_STRICT",
+    "variant": "VOL_ADJUSTED_BREAK",
+    "hold_bars": 6,
+    "direction": "LONG",
+    "n_events": 1729,
+    "gross_return_mean_pct": 1.3623780573816602,
+    "net_return_mean_pct_50": 0.8623780573816603,
+    "net_return_mean_pct_100": 0.3623780573816603,
+    "small_sample_warning": false
+  },
+  {
+    "setup": "BUY_AFTER_FOLLOW_THROUGH_STRICT",
+    "variant": "HIGH_BREAK_50_BPS",
+    "hold_bars": 6,
+    "direction": "LONG",
+    "n_events": 2177,
+    "gross_return_mean_pct": 1.3346120727890325,
+    "net_return_mean_pct_50": 0.8346120727890324,
+    "net_return_mean_pct_100": 0.33461207278903243,
+    "small_sample_warning": false
+  },
+  {
+    "setup": "BUY_AFTER_FOLLOW_THROUGH_STRICT",
+    "variant": "CLOSE_ABOVE_EXPLOSION_HIGH",
+    "hold_bars": 6,
+    "direction": "LONG",
+    "n_events": 1295,
+    "gross_return_mean_pct": 1.2800016557721976,
+    "net_return_mean_pct_50": 0.7800016557721974,
+    "net_return_mean_pct_100": 0.2800016557721974,
+    "small_sample_warning": false
+  },
+  {
+    "setup": "BUY_AFTER_FOLLOW_THROUGH_STRICT",
+    "variant": "HIGH_BREAK_25_BPS",
+    "hold_bars": 6,
+    "direction": "LONG",
+    "n_events": 2435,
+    "gross_return_mean_pct": 1.2729793873248032,
+    "net_return_mean_pct_50": 0.7729793873248032,
+    "net_return_mean_pct_100": 0.27297938732480315,
+    "small_sample_warning": false
+  },
+  {
+    "setup": "BUY_AFTER_FOLLOW_THROUGH_STRICT",
+    "variant": "HIGH_BREAK_0_BPS",
+    "hold_bars": 6,
+    "direction": "LONG",
+    "n_events": 2726,
+    "gross_return_mean_pct": 1.1455450312316398,
+    "net_return_mean_pct_50": 0.64554503123164,
+    "net_return_mean_pct_100": 0.14554503123163998,
+    "small_sample_warning": false
+  },
+  {
+    "setup": "AVOID_DEEP_PULLBACK",
+    "variant": "IMMEDIATE_EXIT_THR_20PCT",
+    "hold_bars": 6,
+    "direction": "LONG",
+    "n_events": 3977,
+    "gross_return_mean_pct": 1.1118144022805379,
+    "net_return_mean_pct_50": 0.6118144022805377,
+    "net_return_mean_pct_100": 0.11181440228053778,
+    "small_sample_warning": false
+  },
+  {
+    "setup": "BUY_AFTER_FOLLOW_THROUGH_STRICT",
+    "variant": "CLOSE_ABOVE_EXPLOSION_CLOSE_50_BPS",
+    "hold_bars": 6,
+    "direction": "LONG",
+    "n_events": 1598,
+    "gross_return_mean_pct": 1.1052555830599624,
+    "net_return_mean_pct_50": 0.6052555830599625,
+    "net_return_mean_pct_100": 0.10525558305996244,
+    "small_sample_warning": false
+  },
+  {
+    "setup": "BUY_AT_EXPLOSION",
+    "variant": "BASELINE",
+    "hold_bars": 6,
+    "direction": "LONG",
+    "n_events": 3977,
+    "gross_return_mean_pct": 1.09782890276961,
+    "net_return_mean_pct_50": 0.5978289027696099,
+    "net_return_mean_pct_100": 0.09782890276960997,
+    "small_sample_warning": false
+  },
+  {
+    "setup": "BUY_AFTER_FOLLOW_THROUGH_STRICT",
+    "variant": "CLOSE_ABOVE_EXPLOSION_CLOSE_25_BPS",
+    "hold_bars": 6,
+    "direction": "LONG",
+    "n_events": 1790,
+    "gross_return_mean_pct": 1.059642732257559,
+    "net_return_mean_pct_50": 0.5596427322575591,
+    "net_return_mean_pct_100": 0.05964273225755918,
+    "small_sample_warning": false
+  },
+  {
+    "setup": "AVOID_DEEP_PULLBACK",
+    "variant": "IMMEDIATE_EXIT_THR_15PCT",
+    "hold_bars": 6,
+    "direction": "LONG",
+    "n_events": 3977,
+    "gross_return_mean_pct": 1.0321653422275974,
+    "net_return_mean_pct_50": 0.5321653422275974,
+    "net_return_mean_pct_100": 0.03216534222759734,
+    "small_sample_warning": false
+  },
+  {
+    "setup": "BUY_AT_EXPLOSION_EVENT_TIME_FILTERED",
+    "variant": "EXCL_EXTREME_OVEREXTENSION",
+    "hold_bars": 6,
+    "direction": "LONG",
+    "n_events": 2983,
+    "gross_return_mean_pct": 1.0300009451438508,
+    "net_return_mean_pct_50": 0.5300009451438508,
+    "net_return_mean_pct_100": 0.030000945143850724,
+    "small_sample_warning": false
+  }
+]

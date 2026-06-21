@@ -1,20 +1,18 @@
-"""Unit tests for research/explosion_delayed_entry_study.py."""
+"""Second-pass unit tests for research/explosion_delayed_entry_study.py."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
-import pytest
 
 from research.explosion_delayed_entry_study import (
     DelayedEntryStudyConfig,
-    build_delayed_entry_signals,
-    build_delayed_entry_trades,
-    build_pullback_bucket_summary,
-    build_strategy_summary,
+    build_second_pass_signals,
+    build_second_pass_trades,
     build_train_test_summary,
+    detect_functional_equivalents,
+    evaluate_follow_through,
     run_delayed_entry_study,
 )
 
@@ -45,177 +43,212 @@ def _make_symbol_df(
 
 
 def _study_frame() -> pd.DataFrame:
-    btc = _make_symbol_df("BTC/USD", [100, 101, 102, 103, 104, 105, 106, 107])
+    btc = _make_symbol_df("BTC/USD", [100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111])
 
-    # Strong follow-through after the explosion.
-    a = _make_symbol_df(
+    # Follow-through path.
+    aaa = _make_symbol_df(
         "AAA/USD",
-        [100, 112, 118, 117, 116, 115, 114, 113],
-        highs=[101, 113, 119, 118, 117, 116, 115, 114],
-        lows=[99, 110, 111, 115, 114, 113, 112, 111],
+        [100, 112, 118, 120, 122, 121, 120, 119, 118, 117, 116, 115],
+        highs=[101, 113, 119, 121, 123, 122, 121, 120, 119, 118, 117, 116],
+        lows=[99, 111, 112, 118, 120, 119, 118, 117, 116, 115, 114, 113],
     )
 
-    # No follow-through, then favorable short drift.
-    b = _make_symbol_df(
+    # No follow-through path, useful for short and risk-exit checks.
+    bbb = _make_symbol_df(
         "BBB/USD",
-        [100, 112, 110, 108, 106, 104, 103, 102],
-        highs=[101, 113, 111, 109, 107, 105, 104, 103],
-        lows=[99, 109, 108, 106, 104, 102, 101, 100],
+        [100, 112, 109, 106, 104, 102, 101, 100, 99, 98, 97, 96],
+        highs=[101, 113, 110, 107, 105, 103, 102, 101, 100, 99, 98, 97],
+        lows=[99, 108, 107, 104, 102, 100, 99, 98, 97, 96, 95, 94],
     )
 
-    # Mild pullback only.
-    c = _make_symbol_df(
+    # Deeper pullback path.
+    ccc = _make_symbol_df(
         "CCC/USD",
-        [100, 112, 114, 113, 112, 111, 110, 109],
-        highs=[101, 113, 115, 114, 113, 112, 111, 110],
-        lows=[99, 111.5, 111.4, 112, 111, 110, 109, 108],
+        [100, 112, 106, 104, 103, 102, 101, 100, 99, 98, 97, 96],
+        highs=[101, 113, 108, 106, 104, 103, 102, 101, 100, 99, 98, 97],
+        lows=[99, 107, 102, 101, 100, 99, 98, 97, 96, 95, 94, 93],
     )
 
-    # Deep pullback.
-    d = _make_symbol_df(
-        "DDD/USD",
-        [100, 112, 107, 106, 105, 104, 103, 102],
-        highs=[101, 113, 108, 107, 106, 105, 104, 103],
-        lows=[99, 108.5, 104, 103, 102, 101, 100, 99],
-    )
-
-    full = pd.concat([btc, a, b, c, d], ignore_index=True)
+    full = pd.concat([btc, aaa, bbb, ccc], ignore_index=True)
     return full.sort_values(["symbol", "timestamp"]).reset_index(drop=True)
 
 
-def test_delayed_entry_timestamp_alignment_and_follow_through() -> None:
+def test_strict_follow_through_threshold_logic() -> None:
+    assert evaluate_follow_through("HIGH_BREAK_0_BPS", 100.0, 110.0, 109.0, 110.1, 2.0, 0.5)
+    assert not evaluate_follow_through("HIGH_BREAK_25_BPS", 100.0, 110.0, 109.0, 110.2, 2.0, 0.5)
+    assert evaluate_follow_through("HIGH_BREAK_25_BPS", 100.0, 110.0, 109.0, 110.3, 2.0, 0.5)
+    assert evaluate_follow_through("CLOSE_ABOVE_EXPLOSION_HIGH", 100.0, 110.0, 110.1, 110.1, 2.0, 0.5)
+    assert not evaluate_follow_through("CLOSE_ABOVE_EXPLOSION_CLOSE_50_BPS", 100.0, 110.0, 100.4, 111.0, 2.0, 0.5)
+
+
+def test_delayed_entry_uses_observation_close_not_explosion_close() -> None:
     cfg = DelayedEntryStudyConfig(ret_4h_threshold_pct=5.0, ret_zscore_threshold=10.0, min_dollar_volume=0.0)
     full = _study_frame()
 
-    signals = build_delayed_entry_signals(full, cfg)
-    row = signals.loc[signals["symbol"] == "AAA/USD"].iloc[0]
+    signals = build_second_pass_signals(full, cfg)
+    trades = build_second_pass_trades(signals, full, cfg)
 
-    assert row["entry_timestamp"] == row["timestamp"] + pd.Timedelta(hours=4)
-    assert row["signal_delay_bars"] == 1
-    assert bool(row["follow_through_1c"]) is True
-    assert bool(row["no_follow_through_1c"]) is False
+    row = trades[
+        (trades["setup"] == "BUY_AFTER_FOLLOW_THROUGH_STRICT")
+        & (trades["variant"] == "HIGH_BREAK_0_BPS")
+        & (trades["symbol"] == "AAA/USD")
+        & (trades["hold_bars"] == 1)
+    ].iloc[0]
+
+    assert row["entry_timestamp"] == row["observation_timestamp"]
+    assert row["entry_timestamp"] == row["event_timestamp"] + pd.Timedelta(hours=4)
 
 
-def test_delayed_entry_uses_only_first_post_event_candle() -> None:
+def test_immediate_entry_risk_management_exits_failures_at_observation_close() -> None:
+    cfg = DelayedEntryStudyConfig(ret_4h_threshold_pct=5.0, ret_zscore_threshold=10.0, min_dollar_volume=0.0)
+    full = _study_frame()
+
+    signals = build_second_pass_signals(full, cfg)
+    trades = build_second_pass_trades(signals, full, cfg)
+
+    row = trades[
+        (trades["setup"] == "BUY_AT_EXPLOSION_EXIT_ON_NO_FOLLOW_THROUGH")
+        & (trades["variant"] == "HIGH_BREAK_0_BPS")
+        & (trades["symbol"] == "BBB/USD")
+        & (trades["hold_bars"] == 6)
+    ].iloc[0]
+
+    assert row["entry_timestamp"] == row["event_timestamp"]
+    assert bool(row["forced_exit_observation"]) is True
+    assert row["exit_timestamp"] == row["observation_timestamp"]
+
+
+def test_event_time_filter_is_no_lookahead() -> None:
     cfg = DelayedEntryStudyConfig(ret_4h_threshold_pct=5.0, ret_zscore_threshold=10.0, min_dollar_volume=0.0)
     base = _study_frame()
     changed = base.copy()
 
-    # Alter a later candle only; the entry decision should stay identical.
-    changed.loc[(changed["symbol"] == "AAA/USD") & (changed["timestamp"] == pd.Timestamp("2026-01-02T12:00:00Z")), "close"] = 500.0
-    changed.loc[(changed["symbol"] == "AAA/USD") & (changed["timestamp"] == pd.Timestamp("2026-01-02T12:00:00Z")), "high"] = 510.0
-    changed.loc[(changed["symbol"] == "AAA/USD") & (changed["timestamp"] == pd.Timestamp("2026-01-02T12:00:00Z")), "low"] = 490.0
+    # mutate only candles far after observation; event-time filters should stay stable
+    changed.loc[(changed["symbol"] == "AAA/USD") & (changed["timestamp"] == pd.Timestamp("2026-01-02T16:00:00Z")), "close"] = 999.0
+    changed.loc[(changed["symbol"] == "AAA/USD") & (changed["timestamp"] == pd.Timestamp("2026-01-02T16:00:00Z")), "high"] = 1000.0
 
-    base_signals = build_delayed_entry_signals(base, cfg)
-    changed_signals = build_delayed_entry_signals(changed, cfg)
+    s1 = build_second_pass_signals(base, cfg)
+    s2 = build_second_pass_signals(changed, cfg)
 
-    base_row = base_signals.loc[base_signals["symbol"] == "AAA/USD"].iloc[0]
-    changed_row = changed_signals.loc[changed_signals["symbol"] == "AAA/USD"].iloc[0]
+    for col in [
+        "event_filter_EXCL_LOW_LIQUIDITY",
+        "event_filter_EXCL_EXTREME_OVEREXTENSION",
+        "event_filter_EXCL_BTC_DOWN_OR_SIDEWAYS",
+        "event_filter_EXCL_HIGH_VOL_LOW_VOLUME",
+        "event_filter_CONSERVATIVE_COMBINED",
+    ]:
+        a = s1.loc[s1["symbol"] == "AAA/USD", col].iloc[0]
+        b = s2.loc[s2["symbol"] == "AAA/USD", col].iloc[0]
+        assert bool(a) == bool(b)
 
-    assert bool(base_row["follow_through_1c"]) == bool(changed_row["follow_through_1c"])
-    assert bool(base_row["deep_pullback_1c"]) == bool(changed_row["deep_pullback_1c"])
-    assert base_row["pullback_bucket_1c"] == changed_row["pullback_bucket_1c"]
 
-
-def test_short_return_is_positive_after_no_follow_through() -> None:
+def test_pullback_threshold_assignment() -> None:
     cfg = DelayedEntryStudyConfig(ret_4h_threshold_pct=5.0, ret_zscore_threshold=10.0, min_dollar_volume=0.0)
     full = _study_frame()
-    signals = build_delayed_entry_signals(full, cfg)
-    trades = build_delayed_entry_trades(signals, full, cfg)
 
-    short_trade = trades[(trades["setup"] == "SHORT_AFTER_NO_FOLLOW_THROUGH") & (trades["symbol"] == "BBB/USD") & (trades["hold_bars"] == 1)].iloc[0]
+    signals = build_second_pass_signals(full, cfg)
+    row = signals.loc[signals["symbol"] == "CCC/USD"].iloc[0]
 
-    assert short_trade["direction"] == "SHORT"
-    assert short_trade["gross_return_pct"] > 0.0
+    assert row["pullback_depth_1c_pct"] < -5.0
+    assert bool(row["deep_pullback_5pct"]) is True
+    assert bool(row["deep_pullback_10pct"]) is False
 
 
-def test_cost_application_subtracts_expected_bps() -> None:
+def test_cost_application_across_threshold_variants() -> None:
     cfg = DelayedEntryStudyConfig(ret_4h_threshold_pct=5.0, ret_zscore_threshold=10.0, min_dollar_volume=0.0)
     full = _study_frame()
-    signals = build_delayed_entry_signals(full, cfg)
-    trades = build_delayed_entry_trades(signals, full, cfg)
+
+    signals = build_second_pass_signals(full, cfg)
+    trades = build_second_pass_trades(signals, full, cfg)
 
     row = trades[(trades["setup"] == "BUY_AT_EXPLOSION") & (trades["symbol"] == "AAA/USD") & (trades["hold_bars"] == 1)].iloc[0]
     assert abs(float(row["net_return_pct_50"]) - (float(row["gross_return_pct"]) - 0.5)) < 1e-12
-    assert bool(row["win_50"]) == (float(row["net_return_pct_50"]) > 0.0)
+    assert abs(float(row["net_return_pct_100"]) - (float(row["gross_return_pct"]) - 1.0)) < 1e-12
 
 
-@pytest.mark.parametrize(
-    ("symbol", "decision_low", "expected_bucket"),
-    [
-        ("NO_PULLBACK/USD", 112.0, "NO_PULLBACK"),
-        ("SHALLOW/USD", 110.8, "SHALLOW"),
-        ("MODERATE/USD", 108.5, "MODERATE"),
-        ("DEEP/USD", 105.0, "DEEP"),
-    ],
-)
-def test_pullback_buckets_are_classified_from_first_post_event_candle(symbol: str, decision_low: float, expected_bucket: str) -> None:
-    cfg = DelayedEntryStudyConfig(ret_4h_threshold_pct=5.0, ret_zscore_threshold=10.0, min_dollar_volume=0.0)
-    btc = _make_symbol_df("BTC/USD", [100, 101, 102, 103, 104, 105])
-    closes = [100, 112, 114, 113, 112, 111]
-    highs = [101, 113, 115, 114, 113, 112]
-    lows = [99, 111, decision_low, 112, 111, 110]
-    alt = _make_symbol_df(symbol, closes, highs=highs, lows=lows)
-    full = pd.concat([btc, alt], ignore_index=True).sort_values(["symbol", "timestamp"]).reset_index(drop=True)
-
-    signals = build_delayed_entry_signals(full, cfg)
-    row = signals.iloc[0]
-
-    assert row["pullback_bucket_1c"] == expected_bucket
-
-
-def test_long_only_exclusion_filter_reduces_baseline_trade_count() -> None:
-    cfg = DelayedEntryStudyConfig(ret_4h_threshold_pct=5.0, ret_zscore_threshold=10.0, min_dollar_volume=0.0)
-    full = _study_frame()
-    signals = build_delayed_entry_signals(full, cfg)
-    trades = build_delayed_entry_trades(signals, full, cfg)
-    summary = build_strategy_summary(trades, cfg, total_event_count=int(signals["event_id"].nunique()))
-
-    baseline = summary[(summary["setup"] == "BUY_AT_EXPLOSION") & (summary["hold_bars"] == 1)].iloc[0]
-    filtered = summary[(summary["setup"] == "AVOID_NO_FOLLOW_THROUGH") & (summary["hold_bars"] == 1)].iloc[0]
-
-    assert filtered["n_events"] < baseline["n_events"]
-    assert filtered["selection_rate"] < baseline["selection_rate"]
-
-
-def test_insufficient_future_candles_are_dropped_for_long_holds() -> None:
+def test_insufficient_future_candles_are_skipped() -> None:
     cfg = DelayedEntryStudyConfig(ret_4h_threshold_pct=5.0, ret_zscore_threshold=10.0, min_dollar_volume=0.0)
     btc = _make_symbol_df("BTC/USD", [100, 101, 102, 103])
-    alt = _make_symbol_df("ZZZ/USD", [100, 112, 110, 108], highs=[101, 113, 111, 109], lows=[99, 109, 108, 107])
+    alt = _make_symbol_df("ZZZ/USD", [100, 112, 109, 108], highs=[101, 113, 110, 109], lows=[99, 108, 107, 106])
     full = pd.concat([btc, alt], ignore_index=True).sort_values(["symbol", "timestamp"]).reset_index(drop=True)
 
-    signals = build_delayed_entry_signals(full, cfg)
-    trades = build_delayed_entry_trades(signals, full, cfg)
+    signals = build_second_pass_signals(full, cfg)
+    trades = build_second_pass_trades(signals, full, cfg)
 
-    assert trades[(trades["symbol"] == "ZZZ/USD") & (trades["hold_bars"] == 6)].empty
+    # Full-horizon setups should be skipped due insufficient candles; early-exit
+    # risk variants may still appear because they close at observation.
+    assert trades[
+        (trades["symbol"] == "ZZZ/USD")
+        & (trades["hold_bars"] == 6)
+        & (trades["setup"] == "BUY_AT_EXPLOSION")
+    ].empty
+    assert trades[
+        (trades["symbol"] == "ZZZ/USD")
+        & (trades["hold_bars"] == 6)
+        & (trades["setup"] == "BUY_AFTER_FOLLOW_THROUGH_STRICT")
+    ].empty
 
 
-def test_train_test_summary_and_end_to_end_run(tmp_path: Path) -> None:
+def test_train_test_summary_includes_degradation_columns() -> None:
     cfg = DelayedEntryStudyConfig(ret_4h_threshold_pct=5.0, ret_zscore_threshold=10.0, min_dollar_volume=0.0, train_fraction=0.5)
-    later_btc = _make_symbol_df("BTC/USD", [108, 109, 110, 111, 112, 113, 114, 115], start="2026-01-03T00:00:00Z")
-    later_alt = _make_symbol_df(
-        "EEE/USD",
-        [100, 112, 111, 110, 109, 108, 107, 106],
-        highs=[101, 113, 112, 111, 110, 109, 108, 107],
-        lows=[99, 109, 108, 107, 106, 105, 104, 103],
+
+    later = _make_symbol_df(
+        "DDD/USD",
+        [100, 112, 114, 113, 112, 111, 110, 109, 108, 107, 106, 105],
+        highs=[101, 113, 115, 114, 113, 112, 111, 110, 109, 108, 107, 106],
+        lows=[99, 111, 112, 111, 110, 109, 108, 107, 106, 105, 104, 103],
         start="2026-01-03T00:00:00Z",
     )
-    full = pd.concat([_study_frame(), later_btc, later_alt], ignore_index=True).sort_values(["symbol", "timestamp"]).reset_index(drop=True)
-    signals = build_delayed_entry_signals(full, cfg)
-    trades = build_delayed_entry_trades(signals, full, cfg)
+    full = pd.concat([_study_frame(), later], ignore_index=True).sort_values(["symbol", "timestamp"]).reset_index(drop=True)
 
-    train_test = build_train_test_summary(trades, cfg, total_event_count=int(signals["event_id"].nunique()))
-    assert not train_test.empty
-    assert set(train_test["split"].unique()) <= {"train", "test"}
+    signals = build_second_pass_signals(full, cfg)
+    trades = build_second_pass_trades(signals, full, cfg)
+    summary = build_train_test_summary(trades, cfg, total_events=int(signals["event_id"].nunique()))
+
+    assert not summary.empty
+    assert "test_train_degradation_pct_50" in summary.columns
+
+
+def test_duplicate_variant_detection() -> None:
+    data = pd.DataFrame(
+        {
+            "event_id": ["e1", "e1", "e2", "e2"],
+            "entry_timestamp": pd.to_datetime(["2026-01-01", "2026-01-01", "2026-01-02", "2026-01-02"], utc=True),
+            "exit_timestamp": pd.to_datetime(["2026-01-02", "2026-01-02", "2026-01-03", "2026-01-03"], utc=True),
+            "gross_return_pct": [1.0, 1.0, -1.0, -1.0],
+            "setup": ["A", "B", "A", "B"],
+            "variant": ["V1", "V2", "V1", "V2"],
+            "hold_bars": [1, 1, 1, 1],
+            "direction": ["LONG", "LONG", "LONG", "LONG"],
+        }
+    )
+    eq = detect_functional_equivalents(data)
+    assert len(eq) == 1
+
+
+def test_end_to_end_second_pass_outputs(tmp_path: Path) -> None:
+    cfg = DelayedEntryStudyConfig(ret_4h_threshold_pct=5.0, ret_zscore_threshold=10.0, min_dollar_volume=0.0)
+    full = _study_frame()
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
-    for symbol in sorted(full["symbol"].unique()):
-        symbol_df = full[full["symbol"] == symbol].copy()
-        symbol_file = data_dir / f"{symbol.lower().replace('/', '-')}_4h.csv"
-        symbol_df[["timestamp", "open", "high", "low", "close", "volume"]].to_csv(symbol_file, index=False)
 
-    out = tmp_path / "delayed-entry"
-    result = run_delayed_entry_study(cfg=cfg, data_dir=data_dir, output_dir=out)
-    assert (out / "summary.md").exists()
+    for symbol in sorted(full["symbol"].unique()):
+        f = full[full["symbol"] == symbol]
+        out = data_dir / f"{symbol.lower().replace('/', '-')}_4h.csv"
+        f[["timestamp", "open", "high", "low", "close", "volume"]].to_csv(out, index=False)
+
+    out_dir = tmp_path / "reports"
+    result = run_delayed_entry_study(cfg=cfg, data_dir=data_dir, output_dir=out_dir)
+
+    second_pass = out_dir / "second_pass"
+    assert (second_pass / "second_pass_trades.csv").exists()
+    assert (second_pass / "second_pass_strategy_summary.csv").exists()
+    assert (second_pass / "follow_through_threshold_sensitivity.csv").exists()
+    assert (second_pass / "event_time_filter_summary.csv").exists()
+    assert (second_pass / "risk_management_exit_summary.csv").exists()
+    assert (second_pass / "pullback_variant_summary.csv").exists()
+    assert (second_pass / "train_test_summary.csv").exists()
+    assert (second_pass / "top_second_pass_setups.json").exists()
+    assert (second_pass / "summary.md").exists()
     assert not result["signals"].empty

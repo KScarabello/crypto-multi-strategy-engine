@@ -1,0 +1,92 @@
+[
+  {
+    "trait": "follow_through",
+    "bucket": "0.0",
+    "n_events": 1251,
+    "label_rate": 0.5707434052757794,
+    "avg_future_ret_4h_pct": -1.6228036929007088,
+    "avg_net_future_ret_4h_pct": -2.1228036929007086,
+    "small_sample_warning": false
+  },
+  {
+    "trait": "pullback_depth",
+    "bucket": "DEEP",
+    "n_events": 592,
+    "label_rate": 0.46114864864864863,
+    "avg_future_ret_4h_pct": -2.814618398498109,
+    "avg_net_future_ret_4h_pct": -3.314618398498109,
+    "small_sample_warning": false
+  },
+  {
+    "trait": "pullback_depth",
+    "bucket": "MODERATE",
+    "n_events": 2096,
+    "label_rate": 0.3702290076335878,
+    "avg_future_ret_4h_pct": -0.1720630250946483,
+    "avg_net_future_ret_4h_pct": -0.6720630250946483,
+    "small_sample_warning": false
+  },
+  {
+    "trait": "btc_regime",
+    "bucket": "SIDEWAYS",
+    "n_events": 988,
+    "label_rate": 0.3340080971659919,
+    "avg_future_ret_4h_pct": 0.052384355542177505,
+    "avg_net_future_ret_4h_pct": -0.4476156444578225,
+    "small_sample_warning": false
+  },
+  {
+    "trait": "price",
+    "bucket": "MICRO",
+    "n_events": 562,
+    "label_rate": 0.3202846975088968,
+    "avg_future_ret_4h_pct": 0.28696798169584287,
+    "avg_net_future_ret_4h_pct": -0.21303201830415713,
+    "small_sample_warning": false
+  },
+  {
+    "trait": "volume_spike",
+    "bucket": "(0.188, 2.059]",
+    "n_events": 992,
+    "label_rate": 0.31955645161290325,
+    "avg_future_ret_4h_pct": -0.017651010373883242,
+    "avg_net_future_ret_4h_pct": -0.5176510103738832,
+    "small_sample_warning": false
+  },
+  {
+    "trait": "liquidity",
+    "bucket": "SMALL",
+    "n_events": 778,
+    "label_rate": 0.31362467866323906,
+    "avg_future_ret_4h_pct": 0.172297928288786,
+    "avg_net_future_ret_4h_pct": -0.327702071711214,
+    "small_sample_warning": false
+  },
+  {
+    "trait": "size_proxy",
+    "bucket": "SMALL",
+    "n_events": 778,
+    "label_rate": 0.31362467866323906,
+    "avg_future_ret_4h_pct": 0.172297928288786,
+    "avg_net_future_ret_4h_pct": -0.327702071711214,
+    "small_sample_warning": false
+  },
+  {
+    "trait": "volatility",
+    "bucket": "(1.898, 2.958]",
+    "n_events": 991,
+    "label_rate": 0.31180625630676084,
+    "avg_future_ret_4h_pct": 0.207907030034102,
+    "avg_net_future_ret_4h_pct": -0.292092969965898,
+    "small_sample_warning": false
+  },
+  {
+    "trait": "price",
+    "bucket": "HIGH",
+    "n_events": 1023,
+    "label_rate": 0.3088954056695992,
+    "avg_future_ret_4h_pct": 0.020788341940873704,
+    "avg_net_future_ret_4h_pct": -0.4792116580591263,
+    "small_sample_warning": false
+  }
+]

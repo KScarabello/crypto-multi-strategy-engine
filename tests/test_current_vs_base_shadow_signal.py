@@ -32,8 +32,43 @@ def test_no_execute_orders_import_or_call() -> None:
     assert "subprocess.run" in source
 
 
+def test_no_mac_specific_repo_path_in_logic() -> None:
+    source = inspect.getsource(shadow)
+    assert "/Users/kimscarabello/Desktop/Repos/crypto/crypto-momentum-strategy" not in source
+
+
+def test_current_repo_dir_explicit_resolution() -> None:
+    repo_dir = Path("/home/trader/repos/crypto-momentum-strategy")
+    data_dir = repo_dir / "data/local"
+    resolved = shadow._resolve_current_repo_dir(current_repo_dir=repo_dir, current_data_dir=data_dir)
+    assert resolved == repo_dir
+
+
+def test_current_repo_dir_inferred_from_current_data_dir() -> None:
+    data_dir = Path("/home/trader/repos/crypto-momentum-strategy/data/local")
+    inferred = shadow._resolve_current_repo_dir(current_repo_dir=None, current_data_dir=data_dir)
+    assert inferred == Path("/home/trader/repos/crypto-momentum-strategy")
+
+
+def test_current_repo_dir_inferred_for_mac_style_path() -> None:
+    data_dir = Path("/Users/example/Desktop/Repos/crypto/crypto-momentum-strategy/data/local")
+    inferred = shadow._resolve_current_repo_dir(current_repo_dir=None, current_data_dir=data_dir)
+    assert inferred == Path("/Users/example/Desktop/Repos/crypto/crypto-momentum-strategy")
+
+
+def test_current_repo_dir_inference_requires_expected_layout() -> None:
+    data_dir = Path("/home/trader/data")
+    try:
+        shadow._resolve_current_repo_dir(current_repo_dir=None, current_data_dir=data_dir)
+    except ValueError as exc:
+        assert "--current-repo-dir" in str(exc)
+    else:
+        raise AssertionError("expected ValueError when repo dir cannot be inferred")
+
+
 def test_no_writes_to_old_repo(monkeypatch) -> None:
     seen = {}
+    linux_repo = Path("/home/trader/repos/crypto-momentum-strategy")
 
     def fake_run(cmd, cwd=None, capture_output=None, text=None, check=None):
         seen["cwd"] = cwd
@@ -59,10 +94,42 @@ def test_no_writes_to_old_repo(monkeypatch) -> None:
         return Result()
 
     monkeypatch.setattr(shadow.subprocess, "run", fake_run)
-    payload = shadow._current_bot_snapshot()
-    assert seen["cwd"] == shadow.OLD_REPO_ROOT
+    payload = shadow._current_bot_snapshot(current_repo_dir=linux_repo, data_dir=linux_repo / "data/local")
+    assert seen["cwd"] == linux_repo
     assert payload["blocked"] is False
     assert payload["cash_weight"] == 0.25
+
+
+def test_linux_style_repo_path_not_blocked(monkeypatch) -> None:
+    linux_repo = Path("/home/trader/repos/crypto-momentum-strategy")
+
+    def fake_run(cmd, cwd=None, capture_output=None, text=None, check=None):
+        class Result:
+            returncode = 0
+            stdout = json.dumps(
+                {
+                    "timestamp": "2026-06-22T04:00:00+00:00",
+                    "data_fresh": True,
+                    "is_rebalance_bar": True,
+                    "target_weights": {"BTC/USD": 0.25, "ETH/USD": 0.25, "SOL/USD": 0.25, "CASH": 0.25},
+                    "cash_weight": 0.25,
+                    "total_risky_weight": 0.75,
+                    "selected_symbols": ["BTC/USD", "ETH/USD", "SOL/USD"],
+                    "warnings": [],
+                    "blocked": False,
+                }
+            )
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr(shadow.subprocess, "run", fake_run)
+    snapshot = shadow._current_bot_snapshot(
+        current_repo_dir=linux_repo,
+        data_dir=linux_repo / "data/local",
+    )
+    assert snapshot["blocked"] is False
+    assert snapshot["source_repo_path"] == str(linux_repo)
 
 
 def test_data_freshness_calculation(tmp_path) -> None:
@@ -215,8 +282,15 @@ def test_old_target_parser_using_fixture(monkeypatch) -> None:
         "blocked": False,
     }
 
-    monkeypatch.setattr(shadow, "_run_current_bot_preview", lambda data_dir=shadow.CURRENT_BOT_DATA_DIR: payload)
-    snapshot = shadow._current_bot_snapshot()
+    monkeypatch.setattr(
+        shadow,
+        "_run_current_bot_preview",
+        lambda current_repo_dir, data_dir=shadow.CURRENT_BOT_DATA_DIR: payload,
+    )
+    snapshot = shadow._current_bot_snapshot(
+        current_repo_dir=Path("/home/trader/repos/crypto-momentum-strategy"),
+        data_dir=Path("/home/trader/repos/crypto-momentum-strategy/data/local"),
+    )
     assert snapshot["timestamp"] == pd.Timestamp("2026-06-10T20:00:00+00:00")
     assert snapshot["cash_weight"] == 0.25
     assert snapshot["target_weights"]["BTC/USD"] == 0.25
@@ -235,8 +309,14 @@ def test_old_strategy_on_research_data_preview(monkeypatch) -> None:
         "blocked": False,
     }
 
-    monkeypatch.setattr(shadow, "_run_current_bot_preview", lambda data_dir=shadow.OLD_RESEARCH_DATA_DIR: payload)
-    snapshot = shadow._old_strategy_on_research_data_snapshot()
+    monkeypatch.setattr(
+        shadow,
+        "_run_current_bot_preview",
+        lambda current_repo_dir, data_dir=shadow.OLD_RESEARCH_DATA_DIR: payload,
+    )
+    snapshot = shadow._old_strategy_on_research_data_snapshot(
+        current_repo_dir=Path("/home/trader/repos/crypto-momentum-strategy"),
+    )
     assert snapshot["source_label"] == shadow.OLD_RESEARCH_PREVIEW_LABEL
     assert snapshot["target_weights"]["SOL/USD"] == 0.25
 
@@ -359,7 +439,10 @@ def test_blocked_old_bot_target_preview_handling(monkeypatch) -> None:
         raise RuntimeError("preview blocked")
 
     monkeypatch.setattr(shadow, "_run_current_bot_preview", boom)
-    snapshot = shadow._current_bot_snapshot()
+    snapshot = shadow._current_bot_snapshot(
+        current_repo_dir=Path("/home/trader/repos/crypto-momentum-strategy"),
+        data_dir=Path("/home/trader/repos/crypto-momentum-strategy/data/local"),
+    )
     assert snapshot["blocked"] is True
     assert snapshot["cash_weight"] == 1.0
 

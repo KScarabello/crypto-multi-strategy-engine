@@ -38,10 +38,9 @@ from research.sleeve_blend_gating_experiment import GateSpec, build_cs_gate_seri
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-OLD_REPO_ROOT = Path("/Users/kimscarabello/Desktop/Repos/crypto/crypto-momentum-strategy")
 REPORT_DIR = REPO_ROOT / "reports/current_vs_base_shadow_signal"
 
-CURRENT_BOT_DATA_DIR = OLD_REPO_ROOT / "data/local"
+CURRENT_BOT_DATA_DIR = REPO_ROOT / "data/local"
 OLD_RESEARCH_DATA_DIR = REPO_ROOT / "data"
 BASE_DATA_DIR = REPO_ROOT / "data"
 BASE_TIMEFRAME = "4h"
@@ -174,21 +173,24 @@ def _audit_data_source(
 
     return pd.DataFrame(rows)
 
-
-def _build_data_freshness_summary() -> pd.DataFrame:
+def _build_data_freshness_summary(
+    current_data_dir: Path = CURRENT_BOT_DATA_DIR,
+    old_research_data_dir: Path = OLD_RESEARCH_DATA_DIR,
+    base_data_dir: Path = BASE_DATA_DIR,
+) -> pd.DataFrame:
     current_rows = _audit_data_source(
         source_label="ACTUAL_OLD_BOT_DATA",
-        data_dir=CURRENT_BOT_DATA_DIR,
+        data_dir=current_data_dir,
         symbols=["BTC/USD", "ETH/USD", "XRP/USD", "SOL/USD", "AVAX/USD"],
     )
     old_preview_rows = _audit_data_source(
         source_label=OLD_RESEARCH_PREVIEW_LABEL,
-        data_dir=OLD_RESEARCH_DATA_DIR,
+        data_dir=old_research_data_dir,
         symbols=["BTC/USD", "ETH/USD", "XRP/USD", "SOL/USD", "AVAX/USD"],
     )
     base_rows = _audit_data_source(
         source_label=CANONICAL_BASE_LABEL,
-        data_dir=BASE_DATA_DIR,
+        data_dir=base_data_dir,
         symbols=list(EXPANDED_UNIVERSE_20),
     )
     return pd.concat([current_rows, old_preview_rows, base_rows], ignore_index=True)
@@ -235,7 +237,29 @@ def _safe_json_loads(text: str) -> dict[str, Any]:
     return payload
 
 
-def _run_current_bot_preview(data_dir: Path = CURRENT_BOT_DATA_DIR) -> dict[str, Any]:
+def _infer_current_repo_dir_from_data_dir(current_data_dir: Path) -> Path | None:
+    data_dir = Path(current_data_dir)
+    if data_dir.name == "local" and data_dir.parent.name == "data":
+        return data_dir.parent.parent
+    return None
+
+
+def _resolve_current_repo_dir(current_repo_dir: Path | None, current_data_dir: Path) -> Path:
+    if current_repo_dir is not None:
+        return Path(current_repo_dir)
+    inferred = _infer_current_repo_dir_from_data_dir(current_data_dir)
+    if inferred is not None:
+        return inferred
+    raise ValueError(
+        "Could not infer current repo dir from current data dir. "
+        "Pass --current-repo-dir explicitly (expected current data dir like /path/to/repo/data/local)."
+    )
+
+
+def _run_current_bot_preview(
+    current_repo_dir: Path,
+    data_dir: Path = CURRENT_BOT_DATA_DIR,
+) -> dict[str, Any]:
     code = (
         "from pathlib import Path; "
         "import json; "
@@ -245,7 +269,7 @@ def _run_current_bot_preview(data_dir: Path = CURRENT_BOT_DATA_DIR) -> dict[str,
     )
     proc = subprocess.run(
         [sys.executable, "-c", code],
-        cwd=OLD_REPO_ROOT,
+        cwd=current_repo_dir,
         capture_output=True,
         text=True,
         check=False,
@@ -258,15 +282,19 @@ def _run_current_bot_preview(data_dir: Path = CURRENT_BOT_DATA_DIR) -> dict[str,
     return _safe_json_loads(stdout)
 
 
-def _current_bot_snapshot(data_dir: Path = CURRENT_BOT_DATA_DIR) -> dict[str, Any]:
+def _current_bot_snapshot(
+    current_repo_dir: Path,
+    data_dir: Path = CURRENT_BOT_DATA_DIR,
+) -> dict[str, Any]:
     warnings: list[str] = []
     try:
-        payload = _run_current_bot_preview(data_dir=data_dir)
+        payload = _run_current_bot_preview(current_repo_dir=current_repo_dir, data_dir=data_dir)
     except Exception as exc:
         return {
             "strategy": "current_live_bot",
             "source_label": CURRENT_BOT_PREVIEW_LABEL,
             "source_path": str(data_dir),
+            "source_repo_path": str(current_repo_dir),
             "timestamp": pd.NaT,
             "data_fresh": False,
             "is_rebalance_point": False,
@@ -299,6 +327,7 @@ def _current_bot_snapshot(data_dir: Path = CURRENT_BOT_DATA_DIR) -> dict[str, An
         "strategy": "current_live_bot",
         "source_label": CURRENT_BOT_PREVIEW_LABEL,
         "source_path": str(data_dir),
+        "source_repo_path": str(current_repo_dir),
         "timestamp": timestamp,
         "data_fresh": data_fresh,
         "is_rebalance_point": is_rebalance_point,
@@ -382,15 +411,19 @@ def _base_snapshot(data_dir: Path = BASE_DATA_DIR) -> dict[str, Any]:
     }
 
 
-def _old_strategy_on_research_data_snapshot(data_dir: Path = OLD_RESEARCH_DATA_DIR) -> dict[str, Any]:
+def _old_strategy_on_research_data_snapshot(
+    current_repo_dir: Path,
+    data_dir: Path = OLD_RESEARCH_DATA_DIR,
+) -> dict[str, Any]:
     warnings: list[str] = []
     try:
-        payload = _run_current_bot_preview(data_dir=data_dir)
+        payload = _run_current_bot_preview(current_repo_dir=current_repo_dir, data_dir=data_dir)
     except Exception as exc:
         return {
             "strategy": "old_strategy_on_research_data_preview",
             "source_label": OLD_RESEARCH_PREVIEW_LABEL,
             "source_path": str(data_dir),
+            "source_repo_path": str(current_repo_dir),
             "timestamp": pd.NaT,
             "data_fresh": False,
             "is_rebalance_point": False,
@@ -423,6 +456,7 @@ def _old_strategy_on_research_data_snapshot(data_dir: Path = OLD_RESEARCH_DATA_D
         "strategy": "old_strategy_on_research_data_preview",
         "source_label": OLD_RESEARCH_PREVIEW_LABEL,
         "source_path": str(data_dir),
+        "source_repo_path": str(current_repo_dir),
         "timestamp": timestamp,
         "data_fresh": data_fresh,
         "is_rebalance_point": is_rebalance_point,
@@ -518,8 +552,10 @@ def _comparison_row(
         "base_blocked": bool(base_snapshot.get("blocked", False)),
         "current_source_label": current_snapshot.get("source_label", CURRENT_BOT_PREVIEW_LABEL),
         "current_source_path": current_snapshot.get("source_path", str(CURRENT_BOT_DATA_DIR)),
+        "current_repo_dir": current_snapshot.get("source_repo_path", ""),
         "old_research_source_label": OLD_RESEARCH_PREVIEW_LABEL,
-        "old_research_source_path": str(OLD_RESEARCH_DATA_DIR),
+        "old_research_source_path": old_research_snapshot.get("source_path", str(OLD_RESEARCH_DATA_DIR)),
+        "old_research_repo_dir": old_research_snapshot.get("source_repo_path", ""),
         "old_research_preview_timestamp": old_research_snapshot.get("timestamp"),
         "old_research_preview_target_weights": json.dumps(old_research_snapshot.get("target_weights", {}), default=str),
         "old_research_preview_btc_exposure": float(old_research_snapshot.get("btc_exposure", 0.0)),
@@ -552,6 +588,9 @@ def compare_current_vs_base(
     current_snapshot: dict[str, Any],
     old_research_snapshot: dict[str, Any],
     base_snapshot: dict[str, Any],
+    current_data_dir: Path = CURRENT_BOT_DATA_DIR,
+    old_research_data_dir: Path = OLD_RESEARCH_DATA_DIR,
+    base_data_dir: Path = BASE_DATA_DIR,
 ) -> ComparisonResult:
     warnings = []
     if current_snapshot["timestamp"] is pd.NaT:
@@ -564,7 +603,11 @@ def compare_current_vs_base(
     base_targets = _snapshot_to_frame(base_snapshot, source_name="canonical_base_strategy")
     target_differences = _union_symbol_frame(current_snapshot, base_snapshot)
     comparison_row = _comparison_row(current_snapshot, old_research_snapshot, base_snapshot, warnings)
-    data_freshness_summary = _build_data_freshness_summary()
+    data_freshness_summary = _build_data_freshness_summary(
+        current_data_dir=current_data_dir,
+        old_research_data_dir=old_research_data_dir,
+        base_data_dir=base_data_dir,
+    )
     data_source_selection = _best_source_from_freshness(data_freshness_summary)
 
     return ComparisonResult(
@@ -626,7 +669,9 @@ def build_summary_markdown(result: ComparisonResult) -> str:
         f"- Current bot data fresh: {current['data_fresh']}",
         f"- Base data fresh: {base['data_fresh']}",
         f"- Current bot source: {current.get('source_label', CURRENT_BOT_PREVIEW_LABEL)} @ {current.get('source_path', CURRENT_BOT_DATA_DIR)}",
-        f"- Old research preview source: {OLD_RESEARCH_PREVIEW_LABEL} @ {OLD_RESEARCH_DATA_DIR}",
+        f"- Current bot repo dir: {current.get('source_repo_path', 'unknown')}",
+        f"- Old research preview source: {OLD_RESEARCH_PREVIEW_LABEL} @ {result.old_research_snapshot.get('source_path', OLD_RESEARCH_DATA_DIR)}",
+        f"- Old research preview repo dir: {result.old_research_snapshot.get('source_repo_path', 'unknown')}",
         f"- Canonical base source: {CANONICAL_BASE_LABEL} @ {BASE_DATA_DIR}",
         f"- Preferred old strategy preview source: {data_sources['preferred_old_strategy_preview_source']}",
         f"- Old research preview weights: {json.dumps(old_preview_weights, default=str)}",
@@ -637,7 +682,14 @@ def build_summary_markdown(result: ComparisonResult) -> str:
         f"- Warnings: {row['warnings'] or 'none'}",
         "",
         "## Manual Run",
-        f"- `./.venv/bin/python research/current_vs_base_shadow_signal.py --current-data-dir {CURRENT_BOT_DATA_DIR} --base-data-dir {BASE_DATA_DIR} --report-dir {REPORT_DIR}`",
+        (
+            "- "
+            f"`./.venv/bin/python research/current_vs_base_shadow_signal.py "
+            f"--current-repo-dir {current.get('source_repo_path', '<current_repo_dir>')} "
+            f"--current-data-dir {current.get('source_path', CURRENT_BOT_DATA_DIR)} "
+            f"--base-data-dir {base.get('source_path', BASE_DATA_DIR)} "
+            f"--report-dir {REPORT_DIR}`"
+        ),
         "",
         "## Safety",
         "- No orders were placed.",
@@ -648,19 +700,30 @@ def build_summary_markdown(result: ComparisonResult) -> str:
 
 
 def run_shadow_signal_comparison(
+    current_repo_dir: Path | None = None,
     current_data_dir: Path = CURRENT_BOT_DATA_DIR,
     base_data_dir: Path = BASE_DATA_DIR,
     report_dir: Path = REPORT_DIR,
 ) -> ComparisonResult:
     report_dir.mkdir(parents=True, exist_ok=True)
     paths = _artifact_paths(report_dir)
-    current_snapshot = _current_bot_snapshot(data_dir=current_data_dir)
-    old_research_snapshot = _old_strategy_on_research_data_snapshot(data_dir=OLD_RESEARCH_DATA_DIR)
+    resolved_current_repo_dir = _resolve_current_repo_dir(
+        current_repo_dir=current_repo_dir,
+        current_data_dir=current_data_dir,
+    )
+    current_snapshot = _current_bot_snapshot(current_repo_dir=resolved_current_repo_dir, data_dir=current_data_dir)
+    old_research_snapshot = _old_strategy_on_research_data_snapshot(
+        current_repo_dir=resolved_current_repo_dir,
+        data_dir=OLD_RESEARCH_DATA_DIR,
+    )
     base_snapshot = _base_snapshot(data_dir=base_data_dir)
     result = compare_current_vs_base(
         current_snapshot=current_snapshot,
         old_research_snapshot=old_research_snapshot,
         base_snapshot=base_snapshot,
+        current_data_dir=current_data_dir,
+        old_research_data_dir=OLD_RESEARCH_DATA_DIR,
+        base_data_dir=base_data_dir,
     )
     result = ComparisonResult(
         current_snapshot=result.current_snapshot,
@@ -689,12 +752,14 @@ def run_shadow_signal_comparison(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Research-only shadow/latest-signal comparison tool")
+    parser.add_argument("--current-repo-dir", default=None)
     parser.add_argument("--current-data-dir", default=str(CURRENT_BOT_DATA_DIR))
     parser.add_argument("--base-data-dir", default=str(BASE_DATA_DIR))
     parser.add_argument("--report-dir", default=str(REPORT_DIR))
     args = parser.parse_args()
 
     result = run_shadow_signal_comparison(
+        current_repo_dir=Path(args.current_repo_dir) if args.current_repo_dir else None,
         current_data_dir=Path(args.current_data_dir),
         base_data_dir=Path(args.base_data_dir),
         report_dir=Path(args.report_dir),

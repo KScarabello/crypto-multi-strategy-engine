@@ -21,7 +21,9 @@
 - Current bot data fresh: True
 - Base data fresh: True
 - Current bot source: ACTUAL_OLD_BOT_TARGET @ /Users/kimscarabello/Desktop/Repos/crypto/crypto-momentum-strategy/data/local
+- Current bot repo dir: /Users/kimscarabello/Desktop/Repos/crypto/crypto-momentum-strategy
 - Old research preview source: OLD_STRATEGY_ON_RESEARCH_DATA_PREVIEW @ /Users/kimscarabello/Repos/crypto/crypto-multi-strategy/data
+- Old research preview repo dir: /Users/kimscarabello/Desktop/Repos/crypto/crypto-momentum-strategy
 - Canonical base source: CANONICAL_BASE_TARGET @ /Users/kimscarabello/Repos/crypto/crypto-multi-strategy/data
 - Preferred old strategy preview source: OLD_STRATEGY_ON_RESEARCH_DATA_PREVIEW
 - Old research preview weights: {"AVAX/USD": 0.0, "BTC/USD": 0.25, "ETH/USD": 0.25, "SOL/USD": 0.25, "XRP/USD": 0.0, "CASH": 0.0}
@@ -32,7 +34,7 @@
 - Warnings: current bot snapshot is not on a rebalance bar | canonical base snapshot is not on a rebalance bar | canonical base BTC gate is off
 
 ## Manual Run
-- `./.venv/bin/python research/current_vs_base_shadow_signal.py --current-data-dir /Users/kimscarabello/Desktop/Repos/crypto/crypto-momentum-strategy/data/local --base-data-dir /Users/kimscarabello/Repos/crypto/crypto-multi-strategy/data --report-dir /Users/kimscarabello/Repos/crypto/crypto-multi-strategy/reports/current_vs_base_shadow_signal`
+- `./.venv/bin/python research/current_vs_base_shadow_signal.py --current-repo-dir /Users/kimscarabello/Desktop/Repos/crypto/crypto-momentum-strategy --current-data-dir /Users/kimscarabello/Desktop/Repos/crypto/crypto-momentum-strategy/data/local --base-data-dir data --report-dir /Users/kimscarabello/Repos/crypto/crypto-multi-strategy/reports/current_vs_base_shadow_signal`
 
 ## Safety
 - No orders were placed.

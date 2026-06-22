@@ -19,7 +19,7 @@
   },
   "canonical_base_target_source": {
     "source_label": "CANONICAL_BASE_TARGET",
-    "source_path": "/Users/kimscarabello/Repos/crypto/crypto-multi-strategy/data/aave-usd_4h.csv",
+    "source_path": "data/aave-usd_4h.csv",
     "fresh_count": 20,
     "total_count": 20,
     "latest_timestamp": "2026-06-22 00:00:00+00:00",

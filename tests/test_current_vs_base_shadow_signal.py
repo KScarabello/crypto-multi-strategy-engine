@@ -9,6 +9,22 @@ import pandas as pd
 from research import current_vs_base_shadow_signal as shadow
 
 
+def _write_ohlcv_csv(path: Path, timestamps: list[str]) -> None:
+    frame = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "open": [1.0] * len(timestamps),
+            "high": [1.0] * len(timestamps),
+            "low": [1.0] * len(timestamps),
+            "close": [1.0] * len(timestamps),
+            "volume": [1.0] * len(timestamps),
+            "symbol": ["BTC/USD"] * len(timestamps),
+        }
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    frame.to_csv(path, index=False)
+
+
 def test_no_execute_orders_import_or_call() -> None:
     source = inspect.getsource(shadow)
     assert "execute_orders" not in source
@@ -47,6 +63,95 @@ def test_no_writes_to_old_repo(monkeypatch) -> None:
     assert seen["cwd"] == shadow.OLD_REPO_ROOT
     assert payload["blocked"] is False
     assert payload["cash_weight"] == 0.25
+
+
+def test_data_freshness_calculation(tmp_path) -> None:
+    data_dir = tmp_path / "data"
+    csv_path = data_dir / "btc-usd_4h.csv"
+    _write_ohlcv_csv(
+        csv_path,
+        [
+            "2026-06-21T20:00:00+00:00",
+            "2026-06-22T00:00:00+00:00",
+        ],
+    )
+    audit = shadow._audit_data_source("TEST_SOURCE", data_dir, ["BTC/USD"])
+    assert bool(audit.loc[0, "fresh_enough"]) is True
+    assert audit.loc[0, "warning_reason"] == ""
+    assert audit.loc[0, "expected_bar_interval_hours"] == 4
+
+
+def test_stale_data_warning_behavior() -> None:
+    current = {
+        "strategy": "current_live_bot",
+        "timestamp": pd.Timestamp("2026-06-10T20:00:00+00:00"),
+        "data_fresh": False,
+        "is_rebalance_point": False,
+        "target_weights": {"BTC/USD": 0.25, "ETH/USD": 0.25, "XRP/USD": 0.25, "CASH": 0.25},
+        "cash_weight": 0.25,
+        "total_risky_weight": 0.75,
+        "btc_exposure": 0.25,
+        "alt_exposure": 0.5,
+        "symbols": ["BTC/USD", "ETH/USD", "XRP/USD"],
+        "warnings": ["current bot data is stale"],
+        "blocked": False,
+        "source_label": shadow.CURRENT_BOT_PREVIEW_LABEL,
+        "source_path": str(shadow.CURRENT_BOT_DATA_DIR),
+    }
+    old_research = {
+        "strategy": "old_strategy_on_research_data_preview",
+        "timestamp": pd.Timestamp("2026-06-10T20:00:00+00:00"),
+        "data_fresh": True,
+        "is_rebalance_point": True,
+        "target_weights": {"BTC/USD": 0.25, "ETH/USD": 0.25, "XRP/USD": 0.25, "CASH": 0.25},
+        "cash_weight": 0.25,
+        "total_risky_weight": 0.75,
+        "btc_exposure": 0.25,
+        "alt_exposure": 0.5,
+        "symbols": ["BTC/USD", "ETH/USD", "XRP/USD"],
+        "warnings": [],
+        "blocked": False,
+        "source_label": shadow.OLD_RESEARCH_PREVIEW_LABEL,
+        "source_path": str(shadow.OLD_RESEARCH_DATA_DIR),
+    }
+    base = {
+        "strategy": "canonical_base_strategy",
+        "timestamp": pd.Timestamp("2026-06-10T20:00:00+00:00"),
+        "data_fresh": False,
+        "is_rebalance_point": False,
+        "btc_gate_on": False,
+        "cs_gate_on": False,
+        "target_weights": {"CASH": 1.0},
+        "cash_weight": 1.0,
+        "total_risky_weight": 0.0,
+        "btc_exposure": 0.0,
+        "alt_exposure": 0.0,
+        "symbols": [],
+        "warnings": ["canonical base data is stale"],
+        "blocked": False,
+        "source_label": shadow.CANONICAL_BASE_LABEL,
+        "source_path": str(shadow.BASE_DATA_DIR),
+    }
+
+    result = shadow.compare_current_vs_base(current, old_research, base)
+    assert "stale data warning" in result.comparison_row["warnings"]
+    assert result.comparison_row["blocker_status"] == "WARNINGS_ONLY"
+    assert "old_research_preview_target_weights" in result.comparison_row
+
+
+def test_source_selection_logic() -> None:
+    freshness = pd.DataFrame(
+        [
+            {"source_label": "ACTUAL_OLD_BOT_DATA", "source_path": "a", "latest_timestamp": pd.Timestamp("2026-06-01T00:00:00+00:00"), "fresh_enough": False},
+            {"source_label": "ACTUAL_OLD_BOT_DATA", "source_path": "a", "latest_timestamp": pd.Timestamp("2026-06-01T00:00:00+00:00"), "fresh_enough": False},
+            {"source_label": "OLD_STRATEGY_ON_RESEARCH_DATA_PREVIEW", "source_path": "b", "latest_timestamp": pd.Timestamp("2026-06-21T20:00:00+00:00"), "fresh_enough": True},
+            {"source_label": "OLD_STRATEGY_ON_RESEARCH_DATA_PREVIEW", "source_path": "b", "latest_timestamp": pd.Timestamp("2026-06-21T20:00:00+00:00"), "fresh_enough": True},
+            {"source_label": "CANONICAL_BASE_TARGET", "source_path": "c", "latest_timestamp": pd.Timestamp("2026-06-21T20:00:00+00:00"), "fresh_enough": True},
+        ]
+    )
+    selection = shadow._best_source_from_freshness(freshness)
+    assert selection["preferred_old_strategy_preview_source"] == "OLD_STRATEGY_ON_RESEARCH_DATA_PREVIEW"
+    assert selection["actual_old_bot_target_source"]["all_fresh"] is False
 
 
 def test_base_target_weights_sum_to_one(monkeypatch) -> None:
@@ -117,6 +222,25 @@ def test_old_target_parser_using_fixture(monkeypatch) -> None:
     assert snapshot["target_weights"]["BTC/USD"] == 0.25
 
 
+def test_old_strategy_on_research_data_preview(monkeypatch) -> None:
+    payload = {
+        "timestamp": "2026-06-22T00:00:00+00:00",
+        "data_fresh": True,
+        "is_rebalance_bar": True,
+        "target_weights": {"BTC/USD": 0.25, "SOL/USD": 0.25, "XRP/USD": 0.25},
+        "cash_weight": 0.25,
+        "total_risky_weight": 0.75,
+        "selected_symbols": ["BTC/USD", "SOL/USD", "XRP/USD"],
+        "warnings": [],
+        "blocked": False,
+    }
+
+    monkeypatch.setattr(shadow, "_run_current_bot_preview", lambda data_dir=shadow.OLD_RESEARCH_DATA_DIR: payload)
+    snapshot = shadow._old_strategy_on_research_data_snapshot()
+    assert snapshot["source_label"] == shadow.OLD_RESEARCH_PREVIEW_LABEL
+    assert snapshot["target_weights"]["SOL/USD"] == 0.25
+
+
 def test_target_difference_calculation() -> None:
     current = {
         "strategy": "current_live_bot",
@@ -131,6 +255,24 @@ def test_target_difference_calculation() -> None:
         "symbols": ["BTC/USD", "ETH/USD", "XRP/USD"],
         "warnings": [],
         "blocked": False,
+        "source_label": shadow.CURRENT_BOT_PREVIEW_LABEL,
+        "source_path": str(shadow.CURRENT_BOT_DATA_DIR),
+    }
+    old_research = {
+        "strategy": "old_strategy_on_research_data_preview",
+        "timestamp": pd.Timestamp("2026-06-10T20:00:00+00:00"),
+        "data_fresh": True,
+        "is_rebalance_point": True,
+        "target_weights": {"BTC/USD": 0.25, "SOL/USD": 0.25, "XRP/USD": 0.25, "CASH": 0.25},
+        "cash_weight": 0.25,
+        "total_risky_weight": 0.75,
+        "btc_exposure": 0.25,
+        "alt_exposure": 0.5,
+        "symbols": ["BTC/USD", "SOL/USD", "XRP/USD"],
+        "warnings": [],
+        "blocked": False,
+        "source_label": shadow.OLD_RESEARCH_PREVIEW_LABEL,
+        "source_path": str(shadow.OLD_RESEARCH_DATA_DIR),
     }
     base = {
         "strategy": "canonical_base_strategy",
@@ -147,9 +289,11 @@ def test_target_difference_calculation() -> None:
         "symbols": ["BTC/USD", "SOL/USD"],
         "warnings": [],
         "blocked": False,
+        "source_label": shadow.CANONICAL_BASE_LABEL,
+        "source_path": str(shadow.BASE_DATA_DIR),
     }
 
-    result = shadow.compare_current_vs_base(current, base)
+    result = shadow.compare_current_vs_base(current, old_research, base)
     assert abs(result.comparison_row["btc_exposure_difference"] - 0.5) < 1e-9
     assert abs(result.comparison_row["cash_difference"] - (-0.25)) < 1e-9
     assert "SOL/USD" in result.target_differences["symbol"].tolist()
@@ -188,6 +332,19 @@ def test_history_append_behavior(tmp_path) -> None:
         "base_only_symbols": "SOL/USD",
         "current_blocked": False,
         "base_blocked": False,
+        "current_source_label": shadow.CURRENT_BOT_PREVIEW_LABEL,
+        "current_source_path": str(shadow.CURRENT_BOT_DATA_DIR),
+        "old_research_source_label": shadow.OLD_RESEARCH_PREVIEW_LABEL,
+        "old_research_source_path": str(shadow.OLD_RESEARCH_DATA_DIR),
+        "old_research_preview_timestamp": pd.Timestamp("2026-06-10T20:00:00+00:00"),
+        "old_research_preview_target_weights": json.dumps({"BTC/USD": 0.25, "SOL/USD": 0.25, "XRP/USD": 0.25, "CASH": 0.25}),
+        "old_research_preview_btc_exposure": 0.25,
+        "old_research_preview_alt_exposure": 0.5,
+        "old_research_preview_cash_weight": 0.25,
+        "old_research_preview_blocked": False,
+        "base_source_label": shadow.CANONICAL_BASE_LABEL,
+        "base_source_path": str(shadow.BASE_DATA_DIR),
+        "blocker_status": "CLEAR",
         "warnings": "",
     }
 
@@ -205,3 +362,54 @@ def test_blocked_old_bot_target_preview_handling(monkeypatch) -> None:
     snapshot = shadow._current_bot_snapshot()
     assert snapshot["blocked"] is True
     assert snapshot["cash_weight"] == 1.0
+
+
+def test_history_append_includes_sources(tmp_path) -> None:
+    history_path = tmp_path / "history.csv"
+    row = {
+        "run_timestamp": pd.Timestamp("2026-06-10T20:00:00+00:00"),
+        "latest_data_timestamp": pd.Timestamp("2026-06-10T20:00:00+00:00"),
+        "current_data_timestamp": pd.Timestamp("2026-06-10T20:00:00+00:00"),
+        "base_data_timestamp": pd.Timestamp("2026-06-10T20:00:00+00:00"),
+        "current_data_fresh": True,
+        "base_data_fresh": True,
+        "current_is_rebalance_point": True,
+        "base_is_rebalance_point": True,
+        "base_btc_gate_on": True,
+        "base_cs_gate_on": True,
+        "current_btc_exposure": 0.25,
+        "base_btc_exposure": 0.75,
+        "btc_exposure_difference": 0.5,
+        "current_alt_exposure": 0.5,
+        "base_alt_exposure": 0.25,
+        "alt_exposure_difference": -0.25,
+        "current_cash_weight": 0.25,
+        "base_cash_weight": 0.0,
+        "cash_difference": -0.25,
+        "current_symbols": "BTC/USD,ETH/USD",
+        "base_symbols": "BTC/USD,SOL/USD",
+        "current_only_symbols": "ETH/USD",
+        "base_only_symbols": "SOL/USD",
+        "current_blocked": False,
+        "base_blocked": False,
+        "current_source_label": shadow.CURRENT_BOT_PREVIEW_LABEL,
+        "current_source_path": str(shadow.CURRENT_BOT_DATA_DIR),
+        "old_research_source_label": shadow.OLD_RESEARCH_PREVIEW_LABEL,
+        "old_research_source_path": str(shadow.OLD_RESEARCH_DATA_DIR),
+        "old_research_preview_timestamp": pd.Timestamp("2026-06-10T20:00:00+00:00"),
+        "old_research_preview_target_weights": json.dumps({"BTC/USD": 0.25, "SOL/USD": 0.25, "XRP/USD": 0.25, "CASH": 0.25}),
+        "old_research_preview_btc_exposure": 0.25,
+        "old_research_preview_alt_exposure": 0.5,
+        "old_research_preview_cash_weight": 0.25,
+        "old_research_preview_blocked": False,
+        "base_source_label": shadow.CANONICAL_BASE_LABEL,
+        "base_source_path": str(shadow.BASE_DATA_DIR),
+        "blocker_status": "CLEAR",
+        "warnings": "",
+    }
+
+    shadow.append_history(history_path, row)
+    history = pd.read_csv(history_path)
+    assert len(history) == 1
+    assert "current_source_label" in history.columns
+    assert "old_research_source_label" in history.columns

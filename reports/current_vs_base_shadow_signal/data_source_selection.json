@@ -1,0 +1,35 @@
+{
+  "actual_old_bot_target_source": {
+    "source_label": "ACTUAL_OLD_BOT_DATA",
+    "source_path": "/Users/kimscarabello/Desktop/Repos/crypto/crypto-momentum-strategy/data/local/btc-usd_4h.csv",
+    "fresh_count": 5,
+    "total_count": 5,
+    "latest_timestamp": "2026-06-22 00:00:00+00:00",
+    "all_fresh": true,
+    "any_fresh": true
+  },
+  "old_strategy_on_research_data_preview_source": {
+    "source_label": "OLD_STRATEGY_ON_RESEARCH_DATA_PREVIEW",
+    "source_path": "/Users/kimscarabello/Repos/crypto/crypto-multi-strategy/data/btc-usd_4h.csv",
+    "fresh_count": 5,
+    "total_count": 5,
+    "latest_timestamp": "2026-06-22 00:00:00+00:00",
+    "all_fresh": true,
+    "any_fresh": true
+  },
+  "canonical_base_target_source": {
+    "source_label": "CANONICAL_BASE_TARGET",
+    "source_path": "/Users/kimscarabello/Repos/crypto/crypto-multi-strategy/data/aave-usd_4h.csv",
+    "fresh_count": 20,
+    "total_count": 20,
+    "latest_timestamp": "2026-06-22 00:00:00+00:00",
+    "all_fresh": true,
+    "any_fresh": true
+  },
+  "preferred_old_strategy_preview_source": "OLD_STRATEGY_ON_RESEARCH_DATA_PREVIEW",
+  "selection_notes": [
+    "actual old bot target is computed from the old repo data/local files",
+    "old-strategy-on-research-data preview is a safe diagnostic only",
+    "canonical base target uses research repo data"
+  ]
+}
